@@ -1,0 +1,41 @@
+[package]
+authors = ["Jacob Brown <kardeiz@gmail.com>"]
+name = "reset-router"
+version = "0.1.0"
+
+[dependencies]
+error-chain = "0.10.0"
+futures = "0.1.13"
+regex = "0.2.1"
+
+[dependencies.bytes]
+optional = true
+version = "0.4.3"
+
+[dependencies.conduit-mime-types]
+optional = true
+version = "0.7.3"
+
+[dependencies.futures-fs]
+optional = true
+version = "0.0.1"
+
+[dependencies.hyper]
+git = "https://github.com/hyperium/hyper"
+rev = "c18d47d"
+
+[dependencies.lazy_static]
+optional = true
+version = "0.2.8"
+
+[dependencies.tokio-core]
+optional = true
+version = "0.1.7"
+
+[dev-dependencies]
+net2 = "0.2.29"
+num_cpus = "1.4.0"
+
+[features]
+default = ["extensions"]
+extensions = ["lazy_static", "conduit-mime-types", "tokio-core", "bytes"]
