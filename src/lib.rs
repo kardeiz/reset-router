@@ -1,35 +1,26 @@
 extern crate hyper;
 extern crate regex;
 extern crate futures;
+extern crate tokio_core;
+extern crate net2;
 
 #[macro_use]
 extern crate error_chain;
-
-#[cfg(feature="extensions")]
-#[macro_use]
-extern crate lazy_static;
-
-#[cfg(feature="extensions")]
-extern crate conduit_mime_types;
-
-#[cfg(feature="extensions")]
-extern crate tokio_core;
-
-#[cfg(feature="extensions")]
-extern crate bytes;
-
-#[cfg(feature="extensions")]
-pub mod extensions;
 
 use hyper::Method;
 use hyper::server::Request as HyperRequest;
 use hyper::server::Response;
 use hyper::server::Service;
+use hyper::server::Http;
 
 use regex::{Regex, RegexSet, Captures};
 use futures::Future;
+// use futures::future::BoxFuture;
 
+// use std::convert::Into;
 use std::ops::{Deref, DerefMut};
+use std::str::FromStr;
+use std::net::SocketAddr;
 
 pub mod err {
     error_chain! {
@@ -37,7 +28,6 @@ pub mod err {
             NotFoundNotSet {
                 description("Did not set not_found handler")
             }
-            #[cfg(feature="extensions")]
             CapturesError {
                 description("Could not parse captures")
             }
@@ -51,9 +41,11 @@ pub mod err {
 
 }
 
+use err::{Error, ErrorKind};
+
 pub struct Request<'a> {
     inner: HyperRequest,
-    regex_match: Option<&'a Regex>
+    regex_match: Option<&'a Regex>,
 }
 
 impl<'a> Deref for Request<'a> {
@@ -74,43 +66,164 @@ impl<'a> From<HyperRequest> for Request<'a> {
     fn from(t: HyperRequest) -> Self {
         Request {
             inner: t,
-            regex_match: None
+            regex_match: None,
         }
     }
 }
 
-
 impl<'a> Request<'a> {
-    fn captures(&self) -> Option<Captures> {
-        self.regex_match
-            .and_then(|r| r.captures(self.path()))
+    pub fn captures(&self) -> Option<Captures> {
+        self.regex_match.and_then(|r| r.captures(self.path()))
+    }
+
+    pub fn extract_captures<T: CaptureExtraction>(&self) -> Result<T, Error> {
+        Ok(T::extract_captures(self)?)
     }
 }
 
-
-impl<T: Future<Item=Response, Error=::hyper::Error>> Router<T> {
-    pub fn build<'a>() -> RouterBuilder<'a, T> { RouterBuilder::default() }
+pub trait CaptureExtraction: Sized {
+    fn extract_captures(req: &Request) -> Result<Self, Error>;
 }
 
-pub trait Handler<T: Future<Item=Response, Error=::hyper::Error>>: Send + Sync {
+impl<T> CaptureExtraction for (T,)
+where
+    T: FromStr,
+{
+    fn extract_captures(req: &Request) -> Result<Self, Error> {
+        let caps = req.captures().ok_or(ErrorKind::CapturesError)?;
+        let out_1 = caps.get(1)
+            .map(|x| x.as_str())
+            .and_then(|x| x.parse().ok())
+            .ok_or(ErrorKind::CapturesError)?;
+        Ok((out_1,))
+    }
+}
+
+impl<T1, T2> CaptureExtraction for (T1, T2)
+where
+    T1: FromStr,
+    T2: FromStr,
+{
+    fn extract_captures(req: &Request) -> Result<Self, Error> {
+        let caps = req.captures().ok_or(ErrorKind::CapturesError)?;
+        let out_1 = caps.get(1)
+            .map(|x| x.as_str())
+            .and_then(|x| x.parse().ok())
+            .ok_or(ErrorKind::CapturesError)?;
+        let out_2 = caps.get(2)
+            .map(|x| x.as_str())
+            .and_then(|x| x.parse().ok())
+            .ok_or(ErrorKind::CapturesError)?;
+        Ok((out_1, out_2))
+    }
+}
+
+impl<T1, T2, T3> CaptureExtraction for (T1, T2, T3)
+where
+    T1: FromStr,
+    T2: FromStr,
+    T3: FromStr,
+{
+    fn extract_captures(req: &Request) -> Result<Self, Error> {
+        let caps = req.captures().ok_or(ErrorKind::CapturesError)?;
+        let out_1 = caps.get(1)
+            .map(|x| x.as_str())
+            .and_then(|x| x.parse().ok())
+            .ok_or(ErrorKind::CapturesError)?;
+        let out_2 = caps.get(2)
+            .map(|x| x.as_str())
+            .and_then(|x| x.parse().ok())
+            .ok_or(ErrorKind::CapturesError)?;
+        let out_3 = caps.get(3)
+            .map(|x| x.as_str())
+            .and_then(|x| x.parse().ok())
+            .ok_or(ErrorKind::CapturesError)?;
+        Ok((out_1, out_2, out_3))
+    }
+}
+
+impl<T: Future<Item = Response, Error = E> + Send, E: Into<Response>> Router<T, E> {
+    pub fn build<'a>() -> RouterBuilder<'a, T, E> {
+        RouterBuilder::default()
+    }
+}
+
+pub trait Handler<T: Future<Item = Response, Error = E> + 'static + Send, E: Into<Response>>
+    : 'static + Send + Sync {
     fn handle(&self, Request) -> T;
 }
 
-impl<F, E, T> Handler<T> for F 
-    where T: Future<Item=Response, Error=::hyper::Error>, 
-        E: Into<T>, 
-        F: Fn(Request) -> Result<T, E> + Sync + Send {
+impl<F, T, E> Handler<T, E> for F
+where
+    T: Future<Item = Response, Error = E> + 'static + Send,
+    E: Into<Response>,
+    F: Fn(Request) -> T + Sync + Send + 'static,
+{
     fn handle(&self, req: Request) -> T {
-        self(req).unwrap_or_else(|e| e.into() )
+        self(req)
     }
 }
 
-impl<'a, T: Future<Item=Response, Error=::hyper::Error>> RouterBuilder<'a, T> {
-    pub fn add_not_found<B>(mut self, handler: B) -> Self where B: Handler<T> + 'static {
+impl<'a, T: Future<Item = Response, Error = E> + 'static + Send, E: Into<Response>>
+    RouterBuilder<'a, T, E> {
+    pub fn add_not_found<B>(mut self, handler: B) -> Self
+    where
+        B: Handler<T, E> + 'static,
+    {
         self.not_found = Some(Box::new(handler));
         self
     }
 }
+
+impl<T: Future<Item = Response, Error = E> + 'static + Send, E: Into<Response> + 'static>
+    Router<T, E> {
+    pub fn quick_serve(self, num_threads: usize, addr: SocketAddr) {
+        use std::sync::Arc;
+        use net2::unix::UnixTcpBuilderExt;
+        use futures::Stream;
+
+        fn inner<
+            T: Future<Item = Response, Error = E> + 'static + Send,
+            E: Into<Response> + 'static,
+        >(
+            addr: &SocketAddr,
+            protocol: Arc<Http>,
+            router: Arc<Router<T, E>>,
+        ) {
+
+            let mut core = tokio_core::reactor::Core::new().unwrap();
+            let hdl = core.handle();
+            let listener = ::net2::TcpBuilder::new_v4()
+                .unwrap()
+                .reuse_port(true)
+                .unwrap()
+                .bind(addr)
+                .unwrap()
+                .listen(128)
+                .unwrap();
+            let listener =
+                ::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl).unwrap();
+            core.run(listener.incoming().for_each(|(socket, addr)| {
+                protocol.bind_connection(&hdl, socket, addr, router.clone());
+                Ok(())
+            })).unwrap();
+        }
+
+        let protocol = Arc::new(Http::new());
+        let router = Arc::new(self);
+
+        for _ in 0..(num_threads - 1) {
+            let protocol_c = protocol.clone();
+            let router_c = router.clone();
+            ::std::thread::spawn(move || inner(&addr, protocol_c, router_c));
+        }
+
+        inner(&addr, protocol, router);
+
+    }
+}
+
+
 
 macro_rules! build {
     ($([$regex_set_for_x:ident, 
@@ -122,26 +235,26 @@ macro_rules! build {
         $add_x_with_priority:ident,
         $hyper_method:pat]),+) => {
 
-        pub struct Router<T> {
-            not_found: Box<Handler<T>>,
+        pub struct Router<T, E> {
+            not_found: Box<Handler<T, E>>,
             $(
                 $regexes_for_x: Option<Vec<Regex>>,
                 $regex_set_for_x: Option<RegexSet>,
                 $priorities_for_x: Option<Vec<usize>>,
-                $handlers_for_x: Option<Vec<Box<Handler<T>>>>
+                $handlers_for_x: Option<Vec<Box<Handler<T, E>>>>
             ),+
         }
 
-        pub struct RouterBuilder<'a, T> {
-            not_found: Option<Box<Handler<T>>>,
+        pub struct RouterBuilder<'a, T, E> {
+            not_found: Option<Box<Handler<T, E>>>,
             $(
                 $strs_for_x: Option<Vec<&'a str>>,
                 $priorities_for_x: Option<Vec<usize>>,
-                $handlers_for_x: Option<Vec<Box<Handler<T>>>>
+                $handlers_for_x: Option<Vec<Box<Handler<T, E>>>>
             ),+
         }
 
-        impl<'a, T: Future<Item=Response, Error=::hyper::Error>> std::default::Default for RouterBuilder<'a, T> {
+        impl<'a, T: Future<Item=Response, Error=E> + Send, E: Into<Response>> std::default::Default for RouterBuilder<'a, T, E> {
             fn default() -> Self {
                 RouterBuilder {
                     not_found: None,
@@ -154,9 +267,9 @@ macro_rules! build {
             }
         }
 
-        impl<'a, T: Future<Item=Response, Error=::hyper::Error>> RouterBuilder<'a, T> {
+        impl<'a, T: Future<Item=Response, Error=E> + 'static + Send, E: Into<Response>> RouterBuilder<'a, T, E> {
             $(
-                pub fn $add_x<B>(mut self, re: &'a str, handler: B) -> Self where B: Handler<T> + 'static {
+                pub fn $add_x<B>(mut self, re: &'a str, handler: B) -> Self where B: Handler<T, E>  {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
@@ -174,7 +287,7 @@ macro_rules! build {
             )*
 
             $(
-                pub fn $add_x_with_priority<B>(mut self, re: &'a str, priority: usize, handler: B) -> Self where B: Handler<T> + 'static {
+                pub fn $add_x_with_priority<B>(mut self, re: &'a str, priority: usize, handler: B) -> Self where B: Handler<T, E>  {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
@@ -191,7 +304,7 @@ macro_rules! build {
                 }
             )*
 
-            pub fn finish(self) -> ::err::Result<Router<T>> {                
+            pub fn finish(self) -> ::err::Result<Router<T, E>> {                
                 $(
                     let mut $regex_set_for_x = None;
                     let mut $regexes_for_x = None;
@@ -221,11 +334,11 @@ macro_rules! build {
             }
         }
 
-        impl<T: Future<Item=Response, Error=::hyper::Error>> Service for Router<T> {
+        impl<T: Future<Item=Response, Error=E> + 'static + Send, E: Into<Response> + 'static> Service for Router<T, E> {
             type Request = HyperRequest;
             type Response = Response;
             type Error = hyper::Error;
-            type Future = T;
+            type Future = futures::future::BoxFuture<Self::Response, Self::Error>;
 
             fn call(&self, req: Self::Request) -> Self::Future {
                 let mut new_req = Request::from(req);
@@ -239,13 +352,13 @@ macro_rules! build {
                                 let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
                                 let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
                                 new_req.regex_match = Some(regex);
-                                return handler.handle(new_req);
+                                return handler.handle(new_req).or_else(|e| Ok(e.into()) ).boxed()
                             } 
                         },
                     )+
                     _ => {}
                 }
-                self.not_found.handle(new_req)
+                self.not_found.handle(new_req).or_else(|e| Ok(e.into()) ).boxed()
             }
         }
 

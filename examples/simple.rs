@@ -3,101 +3,102 @@ extern crate hyper;
 extern crate reset_router;
 extern crate num_cpus;
 
-#[macro_use]
-extern crate lazy_static;
-
-extern crate tokio_core;
-extern crate net2;
+extern crate futures_fs;
+extern crate conduit_mime_types;
 
 use reset_router::{Router, Request};
 
-use futures::future::FutureResult;
 use futures::Stream;
-use futures::Future;
+use futures::{Future, BoxFuture};
 
-use hyper::{Get, Post, StatusCode};
-use hyper::header::{ContentType,ContentLength};
-use hyper::server::{Http, Service, Response};
-use hyper::server::Server;
+#[macro_use]
+extern crate lazy_static;
 
-use hyper::{Body, Chunk};
+use hyper::header::{ContentType, ContentLength};
+use hyper::server::Response;
 
-use tokio_core::net::TcpListener;
-use tokio_core::reactor::Core;
-use tokio_core::reactor::Remote;
+fn mime_for<P: AsRef<::std::path::Path>>(path: P) -> ::hyper::mime::Mime {
+    lazy_static! {
+        pub static ref MIME_TYPES: ::conduit_mime_types::Types = 
+            ::conduit_mime_types::Types::new().unwrap();
+    }
 
-use net2::unix::UnixTcpBuilderExt;
+    let path_as_ref = path.as_ref();
 
-use std::sync::Arc;
+    MIME_TYPES
+        .mime_for_path(path_as_ref)
+        .parse::<::hyper::mime::Mime>()
+        .expect("Unknown MIME type")
+}
 
-use std::convert::Into;
-use std::cell::RefCell;
 
-use reset_router::extensions::ResponseExtensions;
-
-type BoxedResponse = Box<::futures::Future<Item=Response, Error=::hyper::Error>>;
+type BoxedResponse = BoxFuture<Response, LocalError>;
 
 pub struct LocalError {}
 
-impl Into<BoxedResponse> for LocalError {
-    fn into(self) -> BoxedResponse {
+lazy_static! {
+    static ref FS_POOL: ::futures_fs::FsPool = ::futures_fs::FsPool::new(4);
+}
+
+impl Into<Response> for LocalError {
+    fn into(self) -> Response {
         let msg = "Internal Error";
-        ::futures::future::ok(Response::new()
+        Response::new()
             .with_header(ContentLength(msg.len() as u64))
             .with_header(ContentType::plaintext())
-            .with_body(msg)).boxed()
+            .with_body(msg)
     }
 }
 
-fn not_found(_: Request) -> Result<BoxedResponse, LocalError> {
+impl From<::std::io::Error> for LocalError {
+    fn from(_: ::std::io::Error) -> LocalError {
+        LocalError {}
+    }
+}
+
+fn not_found(_: Request) -> BoxedResponse {
     let msg = "NOT FOUND";
-    Ok(::futures::future::ok(Response::new()
-        .with_status(::hyper::StatusCode::NotFound)
-        .with_header(ContentLength(msg.len() as u64))
-        .with_header(ContentType::plaintext())
-        .with_body(msg)).boxed())
+    ::futures::future::ok(
+        Response::new()
+            .with_status(::hyper::StatusCode::NotFound)
+            .with_header(ContentLength(msg.len() as u64))
+            .with_header(ContentType::plaintext())
+            .with_body(msg),
+    ).boxed()
 }
 
-fn index(_: Request) -> Result<BoxedResponse, LocalError> {
-
-    let response = coring::with_handle(|hdl| Response::new().with_path(hdl, "gc-nlp-2.json") ).unwrap();
-
-    Ok(::futures::future::ok(response).boxed())
-}
-
-fn other(_: Request) -> Result<BoxedResponse, LocalError> {
+fn other(_: Request) -> BoxedResponse {
     let msg = "OTHER";
-    Ok(::futures::future::ok(Response::new()
-        .with_status(::hyper::StatusCode::Ok)
-        .with_header(ContentLength(msg.len() as u64))
-        .with_header(ContentType::plaintext())
-        .with_body(msg)).boxed())
+    ::futures::future::ok(
+        Response::new()
+            .with_status(::hyper::StatusCode::Ok)
+            .with_header(ContentLength(msg.len() as u64))
+            .with_header(ContentType::plaintext())
+            .with_body(msg),
+    ).boxed()
 }
 
+fn assets(req: Request) -> BoxedResponse {
 
-pub mod coring {
+    let (p,): (String,) = req.extract_captures().unwrap();
+    let mime = mime_for(&p);
 
-    use tokio_core::reactor::Core;
-    use tokio_core::reactor::Handle;
-    use std::cell::RefCell;
-
-    thread_local!(static CORE: (RefCell<Core>, Handle) = {
-        let core = Core::new().unwrap();
-        let handle = core.handle();
-        (RefCell::new(core), handle)
-    });
-
-    pub fn with_core_mut<T, F: FnOnce(&mut Core) -> T>(cls: F) -> Result<T, ::std::cell::BorrowMutError> {
-        CORE.with(|core| core.0.try_borrow_mut().map(|mut x| cls(&mut *x)) )
+    if p.contains("..") {
+        return futures::future::err(LocalError {}).boxed();
     }
 
-    pub fn with_core<T, F: FnOnce(&Core) -> T>(cls: F) -> Result<T, ::std::cell::BorrowError> {
-        CORE.with(|core| core.0.try_borrow().map(|x| cls(&*x)) )
-    }
-
-    pub fn with_handle<T, F: FnOnce(&Handle) -> T>(cls: F) -> T {
-        CORE.with(|core| cls(&core.1) )
-    }
+    FS_POOL
+        .read(p)
+        .concat2()
+        .from_err()
+        .map(|bytes| {
+            Response::new()
+                .with_status(::hyper::StatusCode::Ok)
+                .with_header(ContentLength(bytes.len() as u64))
+                .with_header(ContentType(mime))
+                .with_body(bytes)
+        })
+        .boxed()
 
 }
 
@@ -106,37 +107,13 @@ pub mod coring {
 fn main() {
     let addr = "0.0.0.0:3000".parse().unwrap();
 
-    let protocol = Arc::new(Http::new());
-
     let router = Router::build()
-        .add_get(r"\A/\z", index)
+        .add_get(r"\A/assets/(.+)\z", assets)
         .add_get(r"\A/other\z", other)
         .add_not_found(not_found)
         .finish()
         .unwrap();
 
-    let router = Arc::new(router);
+    router.quick_serve(num_cpus::get(), addr);
 
-    for _ in 0..(num_cpus::get() - 1) {
-        let protocol = protocol.clone();
-        let router_c = router.clone();
-        ::std::thread::spawn(move || serve(&addr, &protocol, router_c));
-    }
-
-    serve(&addr, &protocol, router);    
-}
-
-fn serve(addr: &::std::net::SocketAddr, protocol: &Http, server: Arc<Router<BoxedResponse>>) {
-    coring::with_core_mut(|core| {
-        let handle = core.handle();
-        let listener = net2::TcpBuilder::new_v4().unwrap()
-            .reuse_port(true).unwrap()
-            .bind(addr).unwrap()
-            .listen(128).unwrap();
-        let listener = TcpListener::from_listener(listener, addr, &handle).unwrap();
-        core.run(listener.incoming().for_each(|(socket, addr)| {
-            protocol.bind_connection(&handle, socket, addr, server.clone());
-            Ok(())
-        })).unwrap();
-    });
 }
