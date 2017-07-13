@@ -9,15 +9,14 @@ extern crate error_chain;
 
 use hyper::Method;
 use hyper::server::Request as HyperRequest;
-use hyper::server::Response;
 use hyper::server::Service;
 use hyper::server::Http;
+pub use hyper::server::Response;
 
 use regex::{Regex, RegexSet, Captures};
-use futures::Future;
-// use futures::future::BoxFuture;
+use futures::{Future, IntoFuture};
+use futures::future::BoxFuture;
 
-// use std::convert::Into;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::net::SocketAddr;
@@ -42,6 +41,7 @@ pub mod err {
 }
 
 use err::{Error, ErrorKind};
+
 
 pub struct Request<'a> {
     inner: HyperRequest,
@@ -78,6 +78,10 @@ impl<'a> Request<'a> {
 
     pub fn extract_captures<T: CaptureExtraction>(&self) -> Result<T, Error> {
         Ok(T::extract_captures(self)?)
+    }
+
+    pub fn into_inner(self) -> HyperRequest {
+        self.inner
     }
 }
 
@@ -142,54 +146,55 @@ where
     }
 }
 
-impl<T: Future<Item = Response, Error = E> + Send, E: Into<Response>> Router<T, E> {
-    pub fn build<'a>() -> RouterBuilder<'a, T, E> {
+impl Router {
+    pub fn build<'a>() -> RouterBuilder<'a> {
         RouterBuilder::default()
     }
 }
 
-pub trait Handler<T: Future<Item = Response, Error = E> + 'static + Send, E: Into<Response>>
-    : 'static + Send + Sync {
-    fn handle(&self, Request) -> T;
+pub trait Handler: 'static + Send + Sync {
+    fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
 }
 
-impl<F, T, E> Handler<T, E> for F
+impl<FN> Handler for FN
 where
-    T: Future<Item = Response, Error = E> + 'static + Send,
-    E: Into<Response>,
-    F: Fn(Request) -> T + Sync + Send + 'static,
+    FN: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
 {
-    fn handle(&self, req: Request) -> T {
+    fn handle(&self, req: Request) -> BoxFuture<Response, ::hyper::Error> {
         self(req)
     }
 }
 
-impl<'a, T: Future<Item = Response, Error = E> + 'static + Send, E: Into<Response>>
-    RouterBuilder<'a, T, E> {
-    pub fn add_not_found<B>(mut self, handler: B) -> Self
-    where
-        B: Handler<T, E> + 'static,
-    {
-        self.not_found = Some(Box::new(handler));
+impl<'a> RouterBuilder<'a> {
+    pub fn add_not_found<
+        I: IntoFuture<Future = F, Item = S, Error = E>,
+        F: Future<Item = S, Error = E> + 'static + Send,
+        S: Into<Response>,
+        E: Into<Response>,
+        FN: Fn(Request) -> I + Sync + Send + 'static,
+    >(
+        mut self,
+        handler: FN,
+    ) -> Self {
+        self.not_found = Some(Box::new(move |req: Request| {
+            handler(req)
+                .into_future()
+                .map(|s| s.into())
+                .or_else(|e| Ok(e.into()))
+                .boxed()
+        }));
         self
     }
 }
 
-impl<T: Future<Item = Response, Error = E> + 'static + Send, E: Into<Response> + 'static>
-    Router<T, E> {
+
+impl Router {
     pub fn quick_serve(self, num_threads: usize, addr: SocketAddr) {
         use std::sync::Arc;
         use net2::unix::UnixTcpBuilderExt;
         use futures::Stream;
 
-        fn inner<
-            T: Future<Item = Response, Error = E> + 'static + Send,
-            E: Into<Response> + 'static,
-        >(
-            addr: &SocketAddr,
-            protocol: Arc<Http>,
-            router: Arc<Router<T, E>>,
-        ) {
+        fn inner(addr: &SocketAddr, protocol: Arc<Http>, router: Arc<Router>) {
 
             let mut core = tokio_core::reactor::Core::new().unwrap();
             let hdl = core.handle();
@@ -235,26 +240,26 @@ macro_rules! build {
         $add_x_with_priority:ident,
         $hyper_method:pat]),+) => {
 
-        pub struct Router<T, E> {
-            not_found: Box<Handler<T, E>>,
+        pub struct Router {
+            not_found: Box<Handler>,
             $(
                 $regexes_for_x: Option<Vec<Regex>>,
                 $regex_set_for_x: Option<RegexSet>,
                 $priorities_for_x: Option<Vec<usize>>,
-                $handlers_for_x: Option<Vec<Box<Handler<T, E>>>>
+                $handlers_for_x: Option<Vec<Box<Handler>>>
             ),+
         }
 
-        pub struct RouterBuilder<'a, T, E> {
-            not_found: Option<Box<Handler<T, E>>>,
+        pub struct RouterBuilder<'a> {
+            not_found: Option<Box<Handler>>,
             $(
                 $strs_for_x: Option<Vec<&'a str>>,
                 $priorities_for_x: Option<Vec<usize>>,
-                $handlers_for_x: Option<Vec<Box<Handler<T, E>>>>
+                $handlers_for_x: Option<Vec<Box<Handler>>>
             ),+
         }
 
-        impl<'a, T: Future<Item=Response, Error=E> + Send, E: Into<Response>> std::default::Default for RouterBuilder<'a, T, E> {
+        impl<'a> std::default::Default for RouterBuilder<'a> {
             fn default() -> Self {
                 RouterBuilder {
                     not_found: None,
@@ -267,16 +272,27 @@ macro_rules! build {
             }
         }
 
-        impl<'a, T: Future<Item=Response, Error=E> + 'static + Send, E: Into<Response>> RouterBuilder<'a, T, E> {
+        impl<'a> RouterBuilder<'a> {
             $(
-                pub fn $add_x<B>(mut self, re: &'a str, handler: B) -> Self where B: Handler<T, E>  {
+                pub fn $add_x<
+                    I: IntoFuture<Future=F, Item=S, Error=E>,
+                    F: Future<Item = S, Error = E> + 'static + Send, 
+                    S: Into<Response>,
+                    E: Into<Response>,
+                    FN: Fn(Request) -> I + Sync + Send + 'static
+                >(mut self, re: &'a str, handler: FN) -> Self {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
 
                     strs.push(re);
                     priorities.push(0);
-                    handlers.push(Box::new(handler));
+
+                    handlers.push(Box::new(move |req: Request| handler(req)
+                        .into_future()
+                        .map(|s| s.into() )
+                        .or_else(|e| Ok(e.into()))
+                        .boxed()));
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);
@@ -287,14 +303,24 @@ macro_rules! build {
             )*
 
             $(
-                pub fn $add_x_with_priority<B>(mut self, re: &'a str, priority: usize, handler: B) -> Self where B: Handler<T, E>  {
+                pub fn $add_x_with_priority<
+                    I: IntoFuture<Future=F, Item=S, Error=E>,
+                    F: Future<Item = S, Error = E> + 'static + Send, 
+                    S: Into<Response>,
+                    E: Into<Response>,
+                    FN: Fn(Request) -> I + Sync + Send + 'static
+                >(mut self, re: &'a str, priority: usize, handler: FN) -> Self {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
 
                     strs.push(re);
                     priorities.push(priority);
-                    handlers.push(Box::new(handler));
+                    handlers.push(Box::new(move |req: Request| handler(req)
+                        .into_future()
+                        .map(|s| s.into() )
+                        .or_else(|e| Ok(e.into()))
+                        .boxed()));
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);
@@ -304,7 +330,7 @@ macro_rules! build {
                 }
             )*
 
-            pub fn finish(self) -> ::err::Result<Router<T, E>> {                
+            pub fn finish(self) -> ::err::Result<Router> {                
                 $(
                     let mut $regex_set_for_x = None;
                     let mut $regexes_for_x = None;
@@ -334,31 +360,35 @@ macro_rules! build {
             }
         }
 
-        impl<T: Future<Item=Response, Error=E> + 'static + Send, E: Into<Response> + 'static> Service for Router<T, E> {
+        impl Service for Router {
+            
             type Request = HyperRequest;
             type Response = Response;
             type Error = hyper::Error;
-            type Future = futures::future::BoxFuture<Self::Response, Self::Error>;
+            type Future = BoxFuture<Self::Response, Self::Error>;
 
             fn call(&self, req: Self::Request) -> Self::Future {
                 let mut new_req = Request::from(req);
                 match *new_req.method() {
                     $(
                         $hyper_method => {
-                            let priorities_opt = self.$priorities_for_x.as_ref();
+                            
                             if let Some(i) = self.$regex_set_for_x.iter()
                                 .flat_map(|s| s.matches(new_req.path()) )
-                                .min_by(|x, y| (&priorities_opt.unwrap()[*x]).cmp(&priorities_opt.unwrap()[*y]) ) {
+                                .min_by(|x, y| {
+                                    let priorities_opt = self.$priorities_for_x.as_ref();
+                                    (&priorities_opt.unwrap()[*x]).cmp(&priorities_opt.unwrap()[*y]) 
+                                }) {
                                 let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
                                 let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
                                 new_req.regex_match = Some(regex);
-                                return handler.handle(new_req).or_else(|e| Ok(e.into()) ).boxed()
+                                return handler.handle(new_req)
                             } 
                         },
                     )+
                     _ => {}
                 }
-                self.not_found.handle(new_req).or_else(|e| Ok(e.into()) ).boxed()
+                self.not_found.handle(new_req)
             }
         }
 
