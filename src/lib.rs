@@ -40,7 +40,18 @@ pub mod err {
 
 }
 
+#[cfg(feature = "ext")]
+pub mod ext;
+
 use err::{Error, ErrorKind};
+
+pub trait IntoResponse {
+    fn into_response(self) -> Response;
+}
+
+impl<T> IntoResponse for T where T: Into<Response> {
+    fn into_response(self) -> Response { self.into() }
+}
 
 
 pub struct Request<'a> {
@@ -67,6 +78,15 @@ impl<'a> From<HyperRequest> for Request<'a> {
         Request {
             inner: t,
             regex_match: None,
+        }
+    }
+}
+
+impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
+    fn from(t: (HyperRequest, Option<&'a Regex>)) -> Self {
+        Request {
+            inner: t.0,
+            regex_match: t.1,
         }
     }
 }
@@ -169,8 +189,8 @@ impl<'a> RouterBuilder<'a> {
     pub fn add_not_found<
         I: IntoFuture<Future = F, Item = S, Error = E>,
         F: Future<Item = S, Error = E> + 'static + Send,
-        S: Into<Response>,
-        E: Into<Response>,
+        S: IntoResponse,
+        E: IntoResponse,
         FN: Fn(Request) -> I + Sync + Send + 'static,
     >(
         mut self,
@@ -179,8 +199,8 @@ impl<'a> RouterBuilder<'a> {
         self.not_found = Some(Box::new(move |req: Request| {
             handler(req)
                 .into_future()
-                .map(|s| s.into())
-                .or_else(|e| Ok(e.into()))
+                .map(|s| s.into_response())
+                .or_else(|e| Ok(e.into_response()))
                 .boxed()
         }));
         self
@@ -226,8 +246,22 @@ impl Router {
         inner(&addr, protocol, router);
 
     }
+
 }
 
+impl Service for Router {
+        
+    type Request = HyperRequest;
+    type Response = Response;
+    type Error = hyper::Error;
+    type Future = BoxFuture<Self::Response, Self::Error>;
+
+    fn call(&self, req: Self::Request) -> Self::Future {
+        let (handler, regex_opt) = self.handler_and_regex_for(&req);
+        let new_req = Request::from((req, regex_opt));
+        handler.handle(new_req)
+    }
+}
 
 
 macro_rules! build {
@@ -277,8 +311,8 @@ macro_rules! build {
                 pub fn $add_x<
                     I: IntoFuture<Future=F, Item=S, Error=E>,
                     F: Future<Item = S, Error = E> + 'static + Send, 
-                    S: Into<Response>,
-                    E: Into<Response>,
+                    S: IntoResponse,
+                    E: IntoResponse,
                     FN: Fn(Request) -> I + Sync + Send + 'static
                 >(mut self, re: &'a str, handler: FN) -> Self {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
@@ -290,8 +324,8 @@ macro_rules! build {
 
                     handlers.push(Box::new(move |req: Request| handler(req)
                         .into_future()
-                        .map(|s| s.into() )
-                        .or_else(|e| Ok(e.into()))
+                        .map(|s| s.into_response() )
+                        .or_else(|e| Ok(e.into_response()))
                         .boxed()));
 
                     self.$strs_for_x = Some(strs);
@@ -306,8 +340,8 @@ macro_rules! build {
                 pub fn $add_x_with_priority<
                     I: IntoFuture<Future=F, Item=S, Error=E>,
                     F: Future<Item = S, Error = E> + 'static + Send, 
-                    S: Into<Response>,
-                    E: Into<Response>,
+                    S: IntoResponse,
+                    E: IntoResponse,
                     FN: Fn(Request) -> I + Sync + Send + 'static
                 >(mut self, re: &'a str, priority: usize, handler: FN) -> Self {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
@@ -318,8 +352,8 @@ macro_rules! build {
                     priorities.push(priority);
                     handlers.push(Box::new(move |req: Request| handler(req)
                         .into_future()
-                        .map(|s| s.into() )
-                        .or_else(|e| Ok(e.into()))
+                        .map(|s| s.into_response() )
+                        .or_else(|e| Ok(e.into_response()))
                         .boxed()));
 
                     self.$strs_for_x = Some(strs);
@@ -360,36 +394,29 @@ macro_rules! build {
             }
         }
 
-        impl Service for Router {
-            
-            type Request = HyperRequest;
-            type Response = Response;
-            type Error = hyper::Error;
-            type Future = BoxFuture<Self::Response, Self::Error>;
+        impl Router {
 
-            fn call(&self, req: Self::Request) -> Self::Future {
-                let mut new_req = Request::from(req);
-                match *new_req.method() {
+            fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<&'a Regex>) {
+                match *req.method() {
                     $(
-                        $hyper_method => {
-                            
+                        $hyper_method => {                            
                             if let Some(i) = self.$regex_set_for_x.iter()
-                                .flat_map(|s| s.matches(new_req.path()) )
+                                .flat_map(|s| s.matches(req.path()) )
                                 .min_by(|x, y| {
                                     let priorities_opt = self.$priorities_for_x.as_ref();
                                     (&priorities_opt.unwrap()[*x]).cmp(&priorities_opt.unwrap()[*y]) 
                                 }) {
                                 let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
                                 let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
-                                new_req.regex_match = Some(regex);
-                                return handler.handle(new_req)
+                                return (handler, Some(regex));
                             } 
                         },
                     )+
                     _ => {}
                 }
-                self.not_found.handle(new_req)
+                return (&self.not_found, None)
             }
+
         }
 
     }

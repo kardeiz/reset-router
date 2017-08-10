@@ -6,17 +6,80 @@ extern crate num_cpus;
 extern crate futures_fs;
 extern crate conduit_mime_types;
 
-use reset_router::{Router, Request, Response};
+extern crate tokio_core;
+extern crate net2;
+
+use reset_router::{Router, Request, Response, IntoResponse};
 
 use futures::Stream;
 use futures::{Future, BoxFuture, IntoFuture};
 
 use std::error::Error;
+use std::net::SocketAddr;
 
 #[macro_use]
 extern crate lazy_static;
 
 use hyper::header::{ContentType, ContentLength};
+use tokio_core::reactor::{Core, Handle};
+
+use std::cell::RefCell;
+
+pub struct CoreHandler(RefCell<Option<Core>>, Handle);
+
+thread_local!(static CORE_HANDLER: CoreHandler = {
+    let core = Core::new().unwrap();
+    let handle = core.handle();
+    CoreHandler(RefCell::new(Some(core)), handle)
+});
+
+pub fn local_core_take() -> Option<Core> {
+    CORE_HANDLER.with(|o| o.0.borrow_mut().take() )
+}
+
+pub fn with_local_handle<T, F: FnOnce(&Handle) -> T>(cls: F) -> T {
+    CORE_HANDLER.with(|o| cls(&o.1))
+}
+
+
+pub fn quick_serve(router: Router, num_threads: usize, addr: SocketAddr) {
+    use std::sync::Arc;
+    use net2::unix::UnixTcpBuilderExt;
+    use futures::Stream;
+    use hyper::server::Http;
+
+    fn inner(addr: &SocketAddr, protocol: Arc<Http>, router: Arc<Router>) {
+
+        let mut core = local_core_take().unwrap();
+        let hdl = core.handle();
+        let listener = ::net2::TcpBuilder::new_v4()
+            .unwrap()
+            .reuse_port(true)
+            .unwrap()
+            .bind(addr)
+            .unwrap()
+            .listen(128)
+            .unwrap();
+        let listener =
+            ::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl).unwrap();
+        core.run(listener.incoming().for_each(|(socket, addr)| {
+            protocol.bind_connection(&hdl, socket, addr, router.clone());
+            Ok(())
+        })).unwrap();
+    }
+
+    let protocol = Arc::new(Http::new());
+    let router = Arc::new(router);
+
+    for _ in 0..(num_threads - 1) {
+        let protocol_c = protocol.clone();
+        let router_c = router.clone();
+        ::std::thread::spawn(move || inner(&addr, protocol_c, router_c));
+    }
+
+    inner(&addr, protocol, router);
+
+}
 
 fn mime_for<P: AsRef<::std::path::Path>>(path: P) -> ::hyper::mime::Mime {
     lazy_static! {
@@ -41,8 +104,8 @@ lazy_static! {
     static ref FS_POOL: ::futures_fs::FsPool = ::futures_fs::FsPool::new(4);
 }
 
-impl Into<Response> for LocalError {
-    fn into(self) -> Response {
+impl IntoResponse for LocalError {
+    fn into_response(self) -> Response {
         let msg = self.0;
         Response::new()
             .with_header(ContentLength(msg.len() as u64))
@@ -74,14 +137,14 @@ fn not_found(_: Request) -> BoxedResponse {
     ).boxed()
 }
 
-fn other(_: Request) -> BoxedResponse {
+fn other(_: Request) -> Result<Response, LocalError> {
     let msg = "OTHER";
     let response = Response::new()
         .with_status(::hyper::StatusCode::Ok)
         .with_header(ContentLength(msg.len() as u64))
         .with_header(ContentType::plaintext())
         .with_body(msg);
-    Ok(response).into_future().boxed()
+    Ok(response)
 }
 
 
@@ -139,6 +202,6 @@ fn main() {
         .finish()
         .unwrap();
 
-    router.quick_serve(num_cpus::get(), addr);
+    quick_serve(router, num_cpus::get(), addr);
 
 }
