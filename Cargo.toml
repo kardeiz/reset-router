@@ -1,0 +1,39 @@
+[package]
+authors = ["Jacob Brown <kardeiz@gmail.com>"]
+name = "reset-router"
+version = "0.2.0"
+
+[dependencies]
+error-chain = "0.10.0"
+futures = "~0.1"
+hyper = "~0.11"
+regex = "~0.2"
+serde = { version = "1.0.11", optional = true }
+
+[dependencies.cookie]
+optional = true
+version = "0.9.1"
+
+[dependencies.net2]
+optional = true
+version = "0.2.29"
+
+[dependencies.serde_json]
+optional = true
+version = "1.0.2"
+
+[dependencies.tokio-core]
+optional = true
+version = "~0.1"
+
+[dev-dependencies]
+conduit-mime-types = "0.7.3"
+futures-fs = "0.0.2"
+lazy_static = "0.2.8"
+net2 = "0.2.29"
+num_cpus = "1.4.0"
+tokio-core = "0.1.8"
+
+[features]
+default = ["ext"]
+ext = ["cookie", "tokio-core", "net2", "serde", "serde_json"]
