@@ -13,7 +13,7 @@ FUTURE: IntoFuture<Future = F, Item = S, Error = E>,
     F: Future<Item = S, Error = E> + 'static + Send,
     S: IntoResponse,
     E: IntoResponse
-```rust
+```
 
 This means you can return something as simple as `Ok(Response::new())`. You don't have to worry about futures
 unless you need to read the request body or interact with other future-aware things.
