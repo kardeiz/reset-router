@@ -1,15 +1,15 @@
 # reset-router
 
-A [RegexSet](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Hyper v0.11.x.
+A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Hyper v0.11.x.
 
 Similar to and inspired by [reroute](https://github.com/gsquire/reroute), but for async Hyper and potentially
 faster (no unnecessary string allocations, no hashmaps, and method-first-matching).
 
-Enables request handling for functions that look like `Fn(Request) -> FUTURE`
-where Request is a thin wrapper around `hyper::server::Request` and
+Enables request handling for functions that look like `Fn(Request) -> RESPONSE`
+where `Request` is a thin wrapper around `hyper::server::Request` and
 
 ```rust,ignore
-FUTURE: IntoFuture<Future = F, Item = S, Error = E>,
+RESPONSE: IntoFuture<Future = F, Item = S, Error = E>,
     F: Future<Item = S, Error = E> + 'static + Send,
     S: IntoResponse,
     E: IntoResponse
