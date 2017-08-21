@@ -11,14 +11,12 @@ extern crate conduit_mime_types;
 
 extern crate tokio_core;
 extern crate net2;
+extern crate serde_json;
 
-use reset_router::{IntoResponse, Request, Response, Router};
+use reset_router::{Request, Response, Router};
 
 use futures::Stream;
-use futures::{BoxFuture, Future, IntoFuture};
-
-use std::error::Error;
-use std::net::SocketAddr;
+use futures::{BoxFuture, Future};
 
 #[macro_use]
 extern crate lazy_static;
@@ -32,6 +30,7 @@ pub mod err {
         foreign_links {
             Io(::std::io::Error);
             Hyper(::hyper::Error);
+            SerdeJson(::serde_json::Error);
         }
     }
 
@@ -40,6 +39,7 @@ pub mod err {
             use hyper::header::{ContentLength, ContentType};
             let msg = format!("{}", &self);
             ::reset_router::Response::new()
+                .with_status(::hyper::StatusCode::InternalServerError)
                 .with_header(ContentLength(msg.len() as u64))
                 .with_header(ContentType::plaintext())
                 .with_body(msg)
@@ -110,12 +110,14 @@ fn other(_: Request) -> err::Result<Response> {
     Ok(response)
 }
 
-fn json(_: Request) -> err::Result<Json<Vec<&'static str>>> {
-    Ok(Json(vec!["a", "bunch", "of", "strings"]))
+fn json(_: Request) -> err::Result<Response> {
+    Ok(
+        Response::new()
+            .with_json(&vec!["a", "bunch", "of", "strings"])?)
 }
 
 
-fn post_body(mut req: Request) -> BoxedResponse {
+fn post_body(req: Request) -> BoxedResponse {
 
     let body = req.into_inner().body();
 
@@ -174,8 +176,7 @@ fn main() {
         .finish()
         .unwrap();
 
-    router.quick_serve(num_cpus::get(), addr, || {
+    router.quick_serve(num_cpus::get() * 8, addr, || {
         core_handling::local_core_take().unwrap()
     });
-
 }

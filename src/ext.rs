@@ -1,9 +1,10 @@
+//! Provides some extensions to Request, Response, and Router
+
 extern crate cookie;
 extern crate tokio_core;
 extern crate net2;
 extern crate serde;
 extern crate serde_json;
-
 
 use self::cookie::{Cookie, CookieJar};
 
@@ -17,6 +18,15 @@ pub trait RequestExtensions {
     fn cookie_jar(&self) -> Option<CookieJar>;
     fn back(&self) -> Option<&str>;
 }
+
+pub trait HavingLen: Into<::hyper::Body> {
+    fn len_(&self) -> usize;
+}
+
+impl HavingLen for &'static [u8] { fn len_(&self) -> usize { (self.len()) } }
+impl HavingLen for Vec<u8> { fn len_(&self) -> usize { (self.len()) } }
+impl HavingLen for &'static str { fn len_(&self) -> usize { (self.len()) } }
+impl HavingLen for String { fn len_(&self) -> usize { (self.len()) } }
 
 impl<'a> RequestExtensions for super::Request<'a> {
     fn cookie_jar(&self) -> Option<CookieJar> {
@@ -40,11 +50,20 @@ impl<'a> RequestExtensions for super::Request<'a> {
 }
 
 pub trait ResponseExtensions {
+
     fn set_cookies(&mut self, jar: &CookieJar);
-    fn with_cookies(self, jar: &CookieJar) -> Self;
+    fn with_cookies(self, jar: &CookieJar) -> Response;
+
+    fn set_sized_body<T: HavingLen>(&mut self, t: T);
+    fn with_sized_body<T: HavingLen>(self, t: T) -> Response;
+
+    fn set_json<S: self::serde::Serialize>(&mut self, obj: &S) -> Result<(), self::serde_json::Error>;
+    fn with_json<S: self::serde::Serialize>(self, obj: &S) -> Result<Response, self::serde_json::Error>;
+
 }
 
 impl ResponseExtensions for Response {
+
     fn set_cookies(&mut self, jar: &CookieJar) {
         let cookies = jar.delta().map(Cookie::to_string).collect::<Vec<_>>();
         if !cookies.is_empty() {
@@ -52,10 +71,35 @@ impl ResponseExtensions for Response {
         }
     }
 
-    fn with_cookies(mut self, jar: &CookieJar) -> Self {
+    fn with_cookies(mut self, jar: &CookieJar) -> Response {
         self.set_cookies(jar);
         self
     }
+
+    fn set_json<S: self::serde::Serialize>(&mut self, obj: &S) -> Result<(), self::serde_json::Error> {
+        use hyper::header::ContentType;
+        let out = self::serde_json::to_vec_pretty(obj)?;
+        self.headers_mut().set(ContentType(::hyper::mime::APPLICATION_JSON));
+        self.set_sized_body(out);
+        Ok(())
+    }
+
+    fn with_json<S: self::serde::Serialize>(mut self, obj: &S) -> Result<Response, self::serde_json::Error> {
+        self.set_json(obj)?;
+        Ok(self)
+    }
+
+    fn set_sized_body<T: HavingLen>(&mut self, t: T) {
+        use hyper::header::ContentLength;
+        self.headers_mut().set(ContentLength(t.len_() as u64));
+        self.set_body(t);
+    }
+
+    fn with_sized_body<T: HavingLen>(mut self, t: T) -> Response {
+        self.set_sized_body(t);
+        self
+    }
+
 }
 
 pub trait RouterExtensions {
@@ -117,20 +161,5 @@ impl RouterExtensions for super::Router {
 
         inner(&addr, protocol, router, core_gen_ref());
 
-    }
-}
-
-pub struct Json<T = self::serde_json::Value>(pub T);
-
-impl<T: self::serde::Serialize> super::IntoResponse for Json<T> {
-    fn into_response(self) -> super::Response {
-        use hyper::header::{ContentLength, ContentType};
-
-        let out = self::serde_json::to_string(&self.0).unwrap();
-        Response::new()
-            .with_status(::hyper::StatusCode::Ok)
-            .with_header(ContentLength(out.len() as u64))
-            .with_header(ContentType(::hyper::mime::APPLICATION_JSON))
-            .with_body(out)
     }
 }
