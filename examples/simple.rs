@@ -140,6 +140,9 @@ fn assets(req: Request) -> BoxedResponse {
         static ref FS_POOL: ::futures_fs::FsPool = ::futures_fs::FsPool::new(4);
     }
 
+    // Don't do this with a public webserver
+    // You will potentially expose any file on your server to user requests
+
     let path = {
         let (p,): (String,) = req.extract_captures().unwrap();
         ::std::path::Path::new(&::std::env::var("ASSETS_BASE").unwrap()).join(&p)
