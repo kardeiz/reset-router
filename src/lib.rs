@@ -51,7 +51,12 @@ use futures::future::BoxFuture;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
+
+
 pub mod err {
+
+    //! Error handling with `error-chain`
+
     error_chain! {
         errors {
             NotFoundNotSet {
@@ -70,12 +75,12 @@ pub mod err {
 
 }
 
-
-
 #[cfg(feature = "ext")]
 pub mod ext;
 
 use err::{Error, ErrorKind};
+
+/// Something that can be converted into a `Response` (cannot fail)
 
 pub trait IntoResponse {
     fn into_response(self) -> Response;
@@ -89,6 +94,8 @@ where
         self.into()
     }
 }
+
+/// Hyper `Request` and the matching regex
 
 pub struct Request<'a> {
     inner: HyperRequest,
@@ -128,9 +135,20 @@ impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
 }
 
 impl<'a> Request<'a> {
+
+    /// Captures (if any) from the matched path regex
+
     pub fn captures(&self) -> Option<Captures> {
         self.regex_match.and_then(|r| r.captures(self.path()))
     }
+
+    /// Parsed capture segments
+    ///
+    /// Use like:
+    ///
+    /// ```rust,ignore
+    /// let (id, slug): (i32, String) = req.extract_captures().unwrap();
+    /// ```
 
     pub fn extract_captures<T: CaptureExtraction>(&self) -> Result<T, Error> {
         Ok(T::extract_captures(self)?)
@@ -140,6 +158,8 @@ impl<'a> Request<'a> {
         self.inner
     }
 }
+
+/// Trait to provide parsed captures from path
 
 pub trait CaptureExtraction: Sized {
     fn extract_captures(req: &Request) -> Result<Self, Error>;
@@ -208,6 +228,8 @@ impl Router {
     }
 }
 
+/// Handle the request
+
 pub trait Handler: 'static + Send + Sync {
     fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
 }
@@ -267,6 +289,8 @@ macro_rules! build {
         $add_x_with_priority:ident,
         $hyper_method:pat]),+) => {
 
+        /// The "finished" `Router`. See [`RouterBuilder`](/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
+
         pub struct Router {
             not_found: Box<Handler>,
             $(
@@ -276,6 +300,12 @@ macro_rules! build {
                 $handlers_for_x: Option<Vec<Box<Handler>>>
             ),+
         }
+
+        /// Builder for a [`Router`](/reset_router/struct.Router.html)
+        ///
+        /// Please note that you can assign a priority to a handler with, e.g., `add_get_with_priority`.
+        ///
+        /// Default priority is 0. Lowest priority (closer to 0) wins.
 
         pub struct RouterBuilder<'a> {
             not_found: Option<Box<Handler>>,
