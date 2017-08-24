@@ -65,11 +65,20 @@ pub mod err {
             CapturesError {
                 description("Could not parse captures")
             }
+            Regex(t: String) {
+                description("regex error")
+                display("regex error: '{}'", t)
+            }
         }
 
         foreign_links {
             Io(::std::io::Error);
-            Regex(::regex::Error);
+        }
+    }
+
+    impl From<::regex::Error> for Error {
+        fn from(t: ::regex::Error) -> Self {
+            Error::from_kind(ErrorKind::Regex(t.to_string()))
         }
     }
 
@@ -135,7 +144,6 @@ impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
 }
 
 impl<'a> Request<'a> {
-
     /// Captures (if any) from the matched path regex
 
     pub fn captures(&self) -> Option<Captures> {
@@ -234,9 +242,9 @@ pub trait Handler: 'static + Send + Sync {
     fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
 }
 
-impl<FN> Handler for FN
+impl<F> Handler for F
 where
-    FN: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
+    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
 {
     fn handle(&self, req: Request) -> BoxFuture<Response, ::hyper::Error> {
         self(req)
@@ -244,16 +252,14 @@ where
 }
 
 impl<'a> RouterBuilder<'a> {
-    pub fn add_not_found<
+    pub fn add_not_found<I, F, S, E, H>(mut self, handler: H) -> Self
+    where
         I: IntoFuture<Future = F, Item = S, Error = E>,
         F: Future<Item = S, Error = E> + 'static + Send,
         S: IntoResponse,
         E: IntoResponse,
-        FN: Fn(Request) -> I + Sync + Send + 'static,
-    >(
-        mut self,
-        handler: FN,
-    ) -> Self {
+        H: Fn(Request) -> I + Sync + Send + 'static,
+    {
         self.not_found = Some(Box::new(move |req: Request| {
             handler(req)
                 .into_future()
@@ -331,13 +337,13 @@ macro_rules! build {
 
         impl<'a> RouterBuilder<'a> {
             $(
-                pub fn $add_x<
+                pub fn $add_x<I, F, S, E, H>(mut self, re: &'a str, handler: H) -> Self where
                     I: IntoFuture<Future=F, Item=S, Error=E>,
                     F: Future<Item = S, Error = E> + 'static + Send,
                     S: IntoResponse,
                     E: IntoResponse,
-                    FN: Fn(Request) -> I + Sync + Send + 'static
-                >(mut self, re: &'a str, handler: FN) -> Self {
+                    H: Fn(Request) -> I + Sync + Send + 'static
+                 {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
@@ -360,13 +366,13 @@ macro_rules! build {
             )*
 
             $(
-                pub fn $add_x_with_priority<
+                pub fn $add_x_with_priority<I, F, S, E, H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
                     I: IntoFuture<Future=F, Item=S, Error=E>,
                     F: Future<Item = S, Error = E> + 'static + Send,
                     S: IntoResponse,
                     E: IntoResponse,
-                    FN: Fn(Request) -> I + Sync + Send + 'static
-                >(mut self, re: &'a str, priority: usize, handler: FN) -> Self {
+                    H: Fn(Request) -> I + Sync + Send + 'static
+                 {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);

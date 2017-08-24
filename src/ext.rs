@@ -23,10 +23,26 @@ pub trait HavingLen: Into<::hyper::Body> {
     fn len_(&self) -> usize;
 }
 
-impl HavingLen for &'static [u8] { fn len_(&self) -> usize { (self.len()) } }
-impl HavingLen for Vec<u8> { fn len_(&self) -> usize { (self.len()) } }
-impl HavingLen for &'static str { fn len_(&self) -> usize { (self.len()) } }
-impl HavingLen for String { fn len_(&self) -> usize { (self.len()) } }
+impl HavingLen for &'static [u8] {
+    fn len_(&self) -> usize {
+        (self.len())
+    }
+}
+impl HavingLen for Vec<u8> {
+    fn len_(&self) -> usize {
+        (self.len())
+    }
+}
+impl HavingLen for &'static str {
+    fn len_(&self) -> usize {
+        (self.len())
+    }
+}
+impl HavingLen for String {
+    fn len_(&self) -> usize {
+        (self.len())
+    }
+}
 
 impl<'a> RequestExtensions for super::Request<'a> {
     fn cookie_jar(&self) -> Option<CookieJar> {
@@ -42,28 +58,30 @@ impl<'a> RequestExtensions for super::Request<'a> {
     }
 
     fn back(&self) -> Option<&str> {
-        self.headers()
-            .get::<header::Referer>()
-            .as_ref()
-            .map(|x| &***x)
+        self.headers().get::<header::Referer>().as_ref().map(
+            |x| &***x,
+        )
     }
 }
 
 pub trait ResponseExtensions {
-
     fn set_cookies(&mut self, jar: &CookieJar);
     fn with_cookies(self, jar: &CookieJar) -> Response;
 
     fn set_sized_body<T: HavingLen>(&mut self, t: T);
     fn with_sized_body<T: HavingLen>(self, t: T) -> Response;
 
-    fn set_json<S: self::serde::Serialize>(&mut self, obj: &S) -> Result<(), self::serde_json::Error>;
-    fn with_json<S: self::serde::Serialize>(self, obj: &S) -> Result<Response, self::serde_json::Error>;
-
+    fn set_json<S: self::serde::Serialize>(
+        &mut self,
+        obj: &S,
+    ) -> Result<(), self::serde_json::Error>;
+    fn with_json<S: self::serde::Serialize>(
+        self,
+        obj: &S,
+    ) -> Result<Response, self::serde_json::Error>;
 }
 
 impl ResponseExtensions for Response {
-
     fn set_cookies(&mut self, jar: &CookieJar) {
         let cookies = jar.delta().map(Cookie::to_string).collect::<Vec<_>>();
         if !cookies.is_empty() {
@@ -76,15 +94,23 @@ impl ResponseExtensions for Response {
         self
     }
 
-    fn set_json<S: self::serde::Serialize>(&mut self, obj: &S) -> Result<(), self::serde_json::Error> {
+    fn set_json<S: self::serde::Serialize>(
+        &mut self,
+        obj: &S,
+    ) -> Result<(), self::serde_json::Error> {
         use hyper::header::ContentType;
         let out = self::serde_json::to_vec_pretty(obj)?;
-        self.headers_mut().set(ContentType(::hyper::mime::APPLICATION_JSON));
+        self.headers_mut().set(ContentType(
+            ::hyper::mime::APPLICATION_JSON,
+        ));
         self.set_sized_body(out);
         Ok(())
     }
 
-    fn with_json<S: self::serde::Serialize>(mut self, obj: &S) -> Result<Response, self::serde_json::Error> {
+    fn with_json<S: self::serde::Serialize>(
+        mut self,
+        obj: &S,
+    ) -> Result<Response, self::serde_json::Error> {
         self.set_json(obj)?;
         Ok(self)
     }
@@ -99,7 +125,6 @@ impl ResponseExtensions for Response {
         self.set_sized_body(t);
         self
     }
-
 }
 
 pub trait RouterExtensions {
@@ -141,8 +166,8 @@ impl RouterExtensions for super::Router {
                 .unwrap()
                 .listen(128)
                 .unwrap();
-            let listener =
-                self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl).unwrap();
+            let listener = self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)
+                .unwrap();
             core.run(listener.incoming().for_each(|(socket, addr)| {
                 protocol.bind_connection(&hdl, socket, addr, router.clone());
                 Ok(())
