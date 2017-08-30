@@ -1,16 +1,37 @@
 [package]
 authors = ["Jacob Brown <kardeiz@gmail.com>"]
 name = "reset-router"
-version = "0.1.0"
+version = "0.2.3"
+license = "MIT"
+description = "A RegexSet based path router for Hyper 0.11"
+keywords = ["hyper", "router", "regexset"]
+categories = ["web-programming::http-server"]
+repository = "https://github.com/kardeiz/reset-router"
+readme = "README.md"
 
 [dependencies]
-cookie = { version = "0.9.1", optional = true }
 error-chain = "0.10.0"
 futures = "~0.1"
 hyper = "~0.11"
-net2 = "0.2.29"
 regex = "~0.2"
-tokio-core = "~0.1"
+serde = { version = "1.0.11", optional = true }
+
+
+[dependencies.cookie]
+optional = true
+version = "0.9.1"
+
+[dependencies.net2]
+optional = true
+version = "0.2.29"
+
+[dependencies.serde_json]
+optional = true
+version = "1.0.2"
+
+[dependencies.tokio-core]
+optional = true
+version = "~0.1"
 
 [dev-dependencies]
 conduit-mime-types = "0.7.3"
@@ -22,4 +43,4 @@ tokio-core = "0.1.8"
 
 [features]
 default = ["ext"]
-ext = ["cookie"]
+ext = ["cookie", "tokio-core", "net2", "serde", "serde_json"]

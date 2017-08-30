@@ -3,128 +3,91 @@ extern crate hyper;
 extern crate reset_router;
 extern crate num_cpus;
 
+#[macro_use]
+extern crate error_chain;
+
 extern crate futures_fs;
 extern crate conduit_mime_types;
 
 extern crate tokio_core;
 extern crate net2;
+extern crate serde_json;
 
-use reset_router::{Router, Request, Response, IntoResponse};
+use reset_router::{Request, Response, Router};
 
 use futures::Stream;
-use futures::{Future, BoxFuture, IntoFuture};
-
-use std::error::Error;
-use std::net::SocketAddr;
+use futures::{BoxFuture, Future};
 
 #[macro_use]
 extern crate lazy_static;
 
-use hyper::header::{ContentType, ContentLength};
-use tokio_core::reactor::{Core, Handle};
+use hyper::header::{ContentLength, ContentType};
 
-use std::cell::RefCell;
+pub mod err {
+    error_chain! {
+        errors { }
 
-pub struct CoreHandler(RefCell<Option<Core>>, Handle);
-
-thread_local!(static CORE_HANDLER: CoreHandler = {
-    let core = Core::new().unwrap();
-    let handle = core.handle();
-    CoreHandler(RefCell::new(Some(core)), handle)
-});
-
-pub fn local_core_take() -> Option<Core> {
-    CORE_HANDLER.with(|o| o.0.borrow_mut().take() )
-}
-
-pub fn with_local_handle<T, F: FnOnce(&Handle) -> T>(cls: F) -> T {
-    CORE_HANDLER.with(|o| cls(&o.1))
-}
-
-
-pub fn quick_serve(router: Router, num_threads: usize, addr: SocketAddr) {
-    use std::sync::Arc;
-    use net2::unix::UnixTcpBuilderExt;
-    use futures::Stream;
-    use hyper::server::Http;
-
-    fn inner(addr: &SocketAddr, protocol: Arc<Http>, router: Arc<Router>) {
-
-        let mut core = local_core_take().unwrap();
-        let hdl = core.handle();
-        let listener = ::net2::TcpBuilder::new_v4()
-            .unwrap()
-            .reuse_port(true)
-            .unwrap()
-            .bind(addr)
-            .unwrap()
-            .listen(128)
-            .unwrap();
-        let listener =
-            ::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl).unwrap();
-        core.run(listener.incoming().for_each(|(socket, addr)| {
-            protocol.bind_connection(&hdl, socket, addr, router.clone());
-            Ok(())
-        })).unwrap();
+        foreign_links {
+            Io(::std::io::Error);
+            Hyper(::hyper::Error);
+            SerdeJson(::serde_json::Error);
+        }
     }
 
-    let protocol = Arc::new(Http::new());
-    let router = Arc::new(router);
-
-    for _ in 0..(num_threads - 1) {
-        let protocol_c = protocol.clone();
-        let router_c = router.clone();
-        ::std::thread::spawn(move || inner(&addr, protocol_c, router_c));
+    impl ::reset_router::IntoResponse for Error {
+        fn into_response(self) -> ::reset_router::Response {
+            use hyper::header::{ContentLength, ContentType};
+            let msg = format!("{}", &self);
+            ::reset_router::Response::new()
+                .with_status(::hyper::StatusCode::InternalServerError)
+                .with_header(ContentLength(msg.len() as u64))
+                .with_header(ContentType::plaintext())
+                .with_body(msg)
+        }
     }
 
-    inner(&addr, protocol, router);
-
 }
 
-fn mime_for<P: AsRef<::std::path::Path>>(path: P) -> ::hyper::mime::Mime {
-    lazy_static! {
-        pub static ref MIME_TYPES: ::conduit_mime_types::Types = 
-            ::conduit_mime_types::Types::new().unwrap();
+mod core_handling {
+    use tokio_core::reactor::{Core, Handle};
+    use std::cell::RefCell;
+
+    pub struct CoreHandler(RefCell<Option<Core>>, Handle);
+
+    thread_local!(static CORE_HANDLER: CoreHandler = {
+        let core = Core::new().unwrap();
+        let handle = core.handle();
+        CoreHandler(RefCell::new(Some(core)), handle)
+    });
+
+    pub fn local_core_take() -> Option<Core> {
+        CORE_HANDLER.with(|o| o.0.borrow_mut().take())
     }
 
-    let path_as_ref = path.as_ref();
-
-    MIME_TYPES
-        .mime_for_path(path_as_ref)
-        .parse::<::hyper::mime::Mime>()
-        .expect("Unknown MIME type")
-}
-
-
-type BoxedResponse = BoxFuture<Response, LocalError>;
-
-pub struct LocalError(String);
-
-lazy_static! {
-    static ref FS_POOL: ::futures_fs::FsPool = ::futures_fs::FsPool::new(4);
-}
-
-impl IntoResponse for LocalError {
-    fn into_response(self) -> Response {
-        let msg = self.0;
-        Response::new()
-            .with_header(ContentLength(msg.len() as u64))
-            .with_header(ContentType::plaintext())
-            .with_body(msg)
+    pub fn with_local_handle<T, F: FnOnce(&Handle) -> T>(cls: F) -> T {
+        CORE_HANDLER.with(|o| cls(&o.1))
     }
 }
 
-impl From<::std::io::Error> for LocalError {
-    fn from(e: ::std::io::Error) -> LocalError {
-        LocalError(e.description().into())
+mod utils {
+    pub fn mime_for<P: AsRef<::std::path::Path>>(path: P) -> ::hyper::mime::Mime {
+        lazy_static! {
+            pub static ref MIME_TYPES: ::conduit_mime_types::Types =
+                ::conduit_mime_types::Types::new().unwrap();
+        }
+
+        let path_as_ref = path.as_ref();
+
+        MIME_TYPES
+            .mime_for_path(path_as_ref)
+            .parse::<::hyper::mime::Mime>()
+            .expect("Unknown MIME type")
     }
 }
 
-impl From<::hyper::Error> for LocalError {
-    fn from(e: ::hyper::Error) -> LocalError {
-        LocalError(e.description().into())
-    }
-}
+use reset_router::ext::*;
+
+type BoxedResponse = BoxFuture<Response, err::Error>;
 
 fn not_found(_: Request) -> BoxedResponse {
     let msg = "NOT FOUND";
@@ -137,7 +100,7 @@ fn not_found(_: Request) -> BoxedResponse {
     ).boxed()
 }
 
-fn other(_: Request) -> Result<Response, LocalError> {
+fn other(_: Request) -> err::Result<Response> {
     let msg = "OTHER";
     let response = Response::new()
         .with_status(::hyper::StatusCode::Ok)
@@ -147,8 +110,14 @@ fn other(_: Request) -> Result<Response, LocalError> {
     Ok(response)
 }
 
+fn json(_: Request) -> err::Result<Response> {
+    Ok(Response::new().with_json(
+        &vec!["a", "bunch", "of", "strings"],
+    )?)
+}
 
-fn post_body(mut req: Request) -> BoxedResponse {
+
+fn post_body(req: Request) -> BoxedResponse {
 
     let body = req.into_inner().body();
 
@@ -167,15 +136,22 @@ fn post_body(mut req: Request) -> BoxedResponse {
 
 fn assets(req: Request) -> BoxedResponse {
 
-    let (p,): (String,) = req.extract_captures().unwrap();
-    let mime = mime_for(&p);
-
-    if p.starts_with("/") || p.contains("..") {
-        return futures::future::err(LocalError("Bad path".into())).boxed();
+    lazy_static! {
+        static ref FS_POOL: ::futures_fs::FsPool = ::futures_fs::FsPool::new(4);
     }
 
+    // Don't do this with a public webserver
+    // You will potentially expose any file on your server to user requests
+
+    let path = {
+        let (p,): (String,) = req.extract_captures().unwrap();
+        ::std::path::Path::new(&::std::env::var("ASSETS_BASE").unwrap()).join(&p)
+    };
+
+    let mime = utils::mime_for(&path);
+
     FS_POOL
-        .read(p)
+        .read(path)
         .concat2()
         .from_err()
         .map(|bytes| {
@@ -196,12 +172,14 @@ fn main() {
 
     let router = Router::build()
         .add_get(r"\A/assets/(.+)\z", assets)
+        .add_get(r"\A/json/*\z", json)
         .add_get(r"\A/other\z", other)
         .add_post(r"\A/post_body\z", post_body)
         .add_not_found(not_found)
         .finish()
         .unwrap();
 
-    quick_serve(router, num_cpus::get(), addr);
-
+    router.quick_serve(num_cpus::get() * 8, addr, || {
+        core_handling::local_core_take().unwrap()
+    });
 }

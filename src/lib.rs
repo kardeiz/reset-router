@@ -1,8 +1,39 @@
+//! A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Hyper v0.11.x.
+//!
+//! Similar to and inspired by [reroute](https://github.com/gsquire/reroute), but for async Hyper and potentially
+//! faster (no unnecessary string allocations, no hashmaps, and method-first-matching).
+//!
+//! Enables request handling for functions that look like `Fn(Request) -> RESPONSE`
+//! where `Request` is a thin wrapper around `hyper::server::Request` and
+//!
+//! ```rust,ignore
+//! RESPONSE: IntoFuture<Future = F, Item = S, Error = E>,
+//!     F: Future<Item = S, Error = E> + 'static + Send,
+//!     S: IntoResponse,
+//!     E: IntoResponse
+//! ```
+//!
+//! This means you can return something as simple as `Ok(Response::new())`. You don't have to worry about futures
+//! unless you need to read the request body or interact with other future-aware things.
+//!
+//! Use like:
+//!
+//! ```rust,ignore
+//! let router = Router::build()
+//!     .add_get(r"\A/\z", |_| Ok::<_, Response>(Response::new().with_body("ROOT path")))
+//!     .add_not_found(|_| Ok::<_, Response>(Response::new().with_body("Route not found")))
+//!     .finish()
+//!     .unwrap();
+//! router.quick_serve(8, "0.0.0.0:3000".parse().unwrap(), || Core::new().unwrap() );
+//! ```
+//!
+//! See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for examples.
+//!
+//!
+
+extern crate futures;
 extern crate hyper;
 extern crate regex;
-extern crate futures;
-extern crate tokio_core;
-extern crate net2;
 
 #[macro_use]
 extern crate error_chain;
@@ -10,18 +41,22 @@ extern crate error_chain;
 use hyper::Method;
 use hyper::server::Request as HyperRequest;
 use hyper::server::Service;
-use hyper::server::Http;
+
 pub use hyper::server::Response;
 
-use regex::{Regex, RegexSet, Captures};
+use regex::{Captures, Regex, RegexSet};
 use futures::{Future, IntoFuture};
 use futures::future::BoxFuture;
 
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use std::net::SocketAddr;
+
+
 
 pub mod err {
+
+    //! Error handling with `error-chain`
+
     error_chain! {
         errors {
             NotFoundNotSet {
@@ -30,11 +65,20 @@ pub mod err {
             CapturesError {
                 description("Could not parse captures")
             }
+            Regex(t: String) {
+                description("regex error")
+                display("regex error: '{}'", t)
+            }
         }
 
         foreign_links {
             Io(::std::io::Error);
-            Regex(::regex::Error);
+        }
+    }
+
+    impl From<::regex::Error> for Error {
+        fn from(t: ::regex::Error) -> Self {
+            Error::from_kind(ErrorKind::Regex(t.to_string()))
         }
     }
 
@@ -45,14 +89,22 @@ pub mod ext;
 
 use err::{Error, ErrorKind};
 
+/// Something that can be converted into a `Response` (cannot fail)
+
 pub trait IntoResponse {
     fn into_response(self) -> Response;
 }
 
-impl<T> IntoResponse for T where T: Into<Response> {
-    fn into_response(self) -> Response { self.into() }
+impl<T> IntoResponse for T
+where
+    T: Into<Response>,
+{
+    fn into_response(self) -> Response {
+        self.into()
+    }
 }
 
+/// Hyper `Request` and the matching regex
 
 pub struct Request<'a> {
     inner: HyperRequest,
@@ -92,9 +144,19 @@ impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
 }
 
 impl<'a> Request<'a> {
+    /// Captures (if any) from the matched path regex
+
     pub fn captures(&self) -> Option<Captures> {
         self.regex_match.and_then(|r| r.captures(self.path()))
     }
+
+    /// Parsed capture segments
+    ///
+    /// Use like:
+    ///
+    /// ```rust,ignore
+    /// let (id, slug): (i32, String) = req.extract_captures().unwrap();
+    /// ```
 
     pub fn extract_captures<T: CaptureExtraction>(&self) -> Result<T, Error> {
         Ok(T::extract_captures(self)?)
@@ -104,6 +166,8 @@ impl<'a> Request<'a> {
         self.inner
     }
 }
+
+/// Trait to provide parsed captures from path
 
 pub trait CaptureExtraction: Sized {
     fn extract_captures(req: &Request) -> Result<Self, Error>;
@@ -172,13 +236,15 @@ impl Router {
     }
 }
 
+/// Handle the request
+
 pub trait Handler: 'static + Send + Sync {
     fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
 }
 
-impl<FN> Handler for FN
+impl<F> Handler for F
 where
-    FN: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
+    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
 {
     fn handle(&self, req: Request) -> BoxFuture<Response, ::hyper::Error> {
         self(req)
@@ -186,16 +252,14 @@ where
 }
 
 impl<'a> RouterBuilder<'a> {
-    pub fn add_not_found<
+    pub fn add_not_found<I, F, S, E, H>(mut self, handler: H) -> Self
+    where
         I: IntoFuture<Future = F, Item = S, Error = E>,
         F: Future<Item = S, Error = E> + 'static + Send,
         S: IntoResponse,
         E: IntoResponse,
-        FN: Fn(Request) -> I + Sync + Send + 'static,
-    >(
-        mut self,
-        handler: FN,
-    ) -> Self {
+        H: Fn(Request) -> I + Sync + Send + 'static,
+    {
         self.not_found = Some(Box::new(move |req: Request| {
             handler(req)
                 .into_future()
@@ -207,50 +271,7 @@ impl<'a> RouterBuilder<'a> {
     }
 }
 
-
-impl Router {
-    pub fn quick_serve(self, num_threads: usize, addr: SocketAddr) {
-        use std::sync::Arc;
-        use net2::unix::UnixTcpBuilderExt;
-        use futures::Stream;
-
-        fn inner(addr: &SocketAddr, protocol: Arc<Http>, router: Arc<Router>) {
-
-            let mut core = tokio_core::reactor::Core::new().unwrap();
-            let hdl = core.handle();
-            let listener = ::net2::TcpBuilder::new_v4()
-                .unwrap()
-                .reuse_port(true)
-                .unwrap()
-                .bind(addr)
-                .unwrap()
-                .listen(128)
-                .unwrap();
-            let listener =
-                ::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl).unwrap();
-            core.run(listener.incoming().for_each(|(socket, addr)| {
-                protocol.bind_connection(&hdl, socket, addr, router.clone());
-                Ok(())
-            })).unwrap();
-        }
-
-        let protocol = Arc::new(Http::new());
-        let router = Arc::new(self);
-
-        for _ in 0..(num_threads - 1) {
-            let protocol_c = protocol.clone();
-            let router_c = router.clone();
-            ::std::thread::spawn(move || inner(&addr, protocol_c, router_c));
-        }
-
-        inner(&addr, protocol, router);
-
-    }
-
-}
-
 impl Service for Router {
-        
     type Request = HyperRequest;
     type Response = Response;
     type Error = hyper::Error;
@@ -265,14 +286,16 @@ impl Service for Router {
 
 
 macro_rules! build {
-    ($([$regex_set_for_x:ident, 
-        $regexes_for_x:ident, 
-        $priorities_for_x:ident, 
-        $handlers_for_x:ident, 
-        $strs_for_x:ident,         
+    ($([$regex_set_for_x:ident,
+        $regexes_for_x:ident,
+        $priorities_for_x:ident,
+        $handlers_for_x:ident,
+        $strs_for_x:ident,
         $add_x:ident,
         $add_x_with_priority:ident,
         $hyper_method:pat]),+) => {
+
+        /// The "finished" `Router`. See [`RouterBuilder`](/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
 
         pub struct Router {
             not_found: Box<Handler>,
@@ -283,6 +306,12 @@ macro_rules! build {
                 $handlers_for_x: Option<Vec<Box<Handler>>>
             ),+
         }
+
+        /// Builder for a [`Router`](/reset_router/struct.Router.html)
+        ///
+        /// Please note that you can assign a priority to a handler with, e.g., `add_get_with_priority`.
+        ///
+        /// Default priority is 0. Lowest priority (closer to 0) wins.
 
         pub struct RouterBuilder<'a> {
             not_found: Option<Box<Handler>>,
@@ -308,13 +337,13 @@ macro_rules! build {
 
         impl<'a> RouterBuilder<'a> {
             $(
-                pub fn $add_x<
+                pub fn $add_x<I, F, S, E, H>(mut self, re: &'a str, handler: H) -> Self where
                     I: IntoFuture<Future=F, Item=S, Error=E>,
-                    F: Future<Item = S, Error = E> + 'static + Send, 
+                    F: Future<Item = S, Error = E> + 'static + Send,
                     S: IntoResponse,
                     E: IntoResponse,
-                    FN: Fn(Request) -> I + Sync + Send + 'static
-                >(mut self, re: &'a str, handler: FN) -> Self {
+                    H: Fn(Request) -> I + Sync + Send + 'static
+                 {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
@@ -337,13 +366,13 @@ macro_rules! build {
             )*
 
             $(
-                pub fn $add_x_with_priority<
+                pub fn $add_x_with_priority<I, F, S, E, H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
                     I: IntoFuture<Future=F, Item=S, Error=E>,
-                    F: Future<Item = S, Error = E> + 'static + Send, 
+                    F: Future<Item = S, Error = E> + 'static + Send,
                     S: IntoResponse,
                     E: IntoResponse,
-                    FN: Fn(Request) -> I + Sync + Send + 'static
-                >(mut self, re: &'a str, priority: usize, handler: FN) -> Self {
+                    H: Fn(Request) -> I + Sync + Send + 'static
+                 {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
                     let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
@@ -364,7 +393,7 @@ macro_rules! build {
                 }
             )*
 
-            pub fn finish(self) -> ::err::Result<Router> {                
+            pub fn finish(self) -> ::err::Result<Router> {
                 $(
                     let mut $regex_set_for_x = None;
                     let mut $regexes_for_x = None;
@@ -376,7 +405,7 @@ macro_rules! build {
                                 out.push(Regex::new(s)?);
                             }
                             Some(out)
-                        };                          
+                        };
                     }
                 )+
 
@@ -399,22 +428,22 @@ macro_rules! build {
             fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<&'a Regex>) {
                 match *req.method() {
                     $(
-                        $hyper_method => {                            
+                        $hyper_method => {
                             if let Some(i) = self.$regex_set_for_x.iter()
                                 .flat_map(|s| s.matches(req.path()) )
                                 .min_by(|x, y| {
                                     let priorities_opt = self.$priorities_for_x.as_ref();
-                                    (&priorities_opt.unwrap()[*x]).cmp(&priorities_opt.unwrap()[*y]) 
+                                    (&priorities_opt.unwrap()[*x]).cmp(&priorities_opt.unwrap()[*y])
                                 }) {
                                 let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
                                 let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
                                 return (handler, Some(regex));
-                            } 
+                            }
                         },
                     )+
                     _ => {}
                 }
-                return (&self.not_found, None)
+                return (&self.not_found, None);
             }
 
         }
