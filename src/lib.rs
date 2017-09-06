@@ -46,7 +46,6 @@ pub use hyper::server::Response;
 
 use regex::{Captures, Regex, RegexSet};
 use futures::{Future, IntoFuture};
-use futures::future::BoxFuture;
 
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
@@ -239,14 +238,18 @@ impl Router {
 /// Handle the request
 
 pub trait Handler: 'static + Send + Sync {
-    fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
+    fn handle(&self, Request) -> Box<Future<Item = Response, Error = ::hyper::Error> + Send>;
 }
 
 impl<F> Handler for F
 where
-    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
+    F: Fn(Request)
+        -> Box<Future<Item = Response, Error = ::hyper::Error> + Send>
+        + 'static
+        + Send
+        + Sync,
 {
-    fn handle(&self, req: Request) -> BoxFuture<Response, ::hyper::Error> {
+    fn handle(&self, req: Request) -> Box<Future<Item = Response, Error = ::hyper::Error> + Send> {
         self(req)
     }
 }
@@ -261,11 +264,12 @@ impl<'a> RouterBuilder<'a> {
         H: Fn(Request) -> I + Sync + Send + 'static,
     {
         self.not_found = Some(Box::new(move |req: Request| {
-            handler(req)
-                .into_future()
-                .map(|s| s.into_response())
-                .or_else(|e| Ok(e.into_response()))
-                .boxed()
+            Box::new(
+                handler(req)
+                    .into_future()
+                    .map(|s| s.into_response())
+                    .or_else(|e| Ok(e.into_response())),
+            ) as Box<Future<Item = _, Error = _> + Send>
         }));
         self
     }
@@ -275,7 +279,7 @@ impl Service for Router {
     type Request = HyperRequest;
     type Response = Response;
     type Error = hyper::Error;
-    type Future = BoxFuture<Self::Response, Self::Error>;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error> + Send>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
         let (handler, regex_opt) = self.handler_and_regex_for(&req);
@@ -351,11 +355,11 @@ macro_rules! build {
                     strs.push(re);
                     priorities.push(0);
 
-                    handlers.push(Box::new(move |req: Request| handler(req)
-                        .into_future()
-                        .map(|s| s.into_response() )
-                        .or_else(|e| Ok(e.into_response()))
-                        .boxed()));
+                    handlers.push(Box::new(move |req: Request| 
+                        Box::new(handler(req)
+                            .into_future()
+                            .map(|s| s.into_response() )
+                            .or_else(|e| Ok(e.into_response()))) as Box<Future<Item=_,Error=_> + Send>));
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);
@@ -379,11 +383,11 @@ macro_rules! build {
 
                     strs.push(re);
                     priorities.push(priority);
-                    handlers.push(Box::new(move |req: Request| handler(req)
-                        .into_future()
-                        .map(|s| s.into_response() )
-                        .or_else(|e| Ok(e.into_response()))
-                        .boxed()));
+                    handlers.push(Box::new(move |req: Request| 
+                        Box::new(handler(req)
+                            .into_future()
+                            .map(|s| s.into_response() )
+                            .or_else(|e| Ok(e.into_response()))) as Box<Future<Item=_,Error=_> + Send>));
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);

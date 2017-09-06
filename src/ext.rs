@@ -58,9 +58,10 @@ impl<'a> RequestExtensions for super::Request<'a> {
     }
 
     fn back(&self) -> Option<&str> {
-        self.headers().get::<header::Referer>().as_ref().map(
-            |x| &***x,
-        )
+        self.headers()
+            .get::<header::Referer>()
+            .as_ref()
+            .map(|x| &***x)
     }
 }
 
@@ -100,9 +101,8 @@ impl ResponseExtensions for Response {
     ) -> Result<(), self::serde_json::Error> {
         use hyper::header::ContentType;
         let out = self::serde_json::to_vec_pretty(obj)?;
-        self.headers_mut().set(ContentType(
-            ::hyper::mime::APPLICATION_JSON,
-        ));
+        self.headers_mut()
+            .set(ContentType(::hyper::mime::APPLICATION_JSON));
         self.set_sized_body(out);
         Ok(())
     }
@@ -166,8 +166,8 @@ impl RouterExtensions for super::Router {
                 .unwrap()
                 .listen(128)
                 .unwrap();
-            let listener = self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)
-                .unwrap();
+            let listener =
+                self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl).unwrap();
             core.run(listener.incoming().for_each(|(socket, addr)| {
                 protocol.bind_connection(&hdl, socket, addr, router.clone());
                 Ok(())

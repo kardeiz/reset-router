@@ -111,9 +111,8 @@ fn other(_: Request) -> err::Result<Response> {
 }
 
 fn json(_: Request) -> err::Result<Response> {
-    Ok(Response::new().with_json(
-        &vec!["a", "bunch", "of", "strings"],
-    )?)
+    Ok(Response::new()
+        .with_json(&vec!["a", "bunch", "of", "strings"])?)
 }
 
 
