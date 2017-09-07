@@ -44,7 +44,7 @@ impl HavingLen for String {
     }
 }
 
-impl<'a> RequestExtensions for super::Request<'a> {
+impl RequestExtensions for super::Request {
     fn cookie_jar(&self) -> Option<CookieJar> {
         if let Some(cookies) = self.headers().get::<header::Cookie>() {
             let mut jar = CookieJar::new();

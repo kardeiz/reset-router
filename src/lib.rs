@@ -50,6 +50,8 @@ use futures::{Future, IntoFuture};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
+use std::sync::Arc;
+
 pub mod err {
 
     //! Error handling with `error-chain`
@@ -105,12 +107,12 @@ where
 
 /// Hyper `Request` and the matching regex
 
-pub struct Request<'a> {
+pub struct Request {
     inner: HyperRequest,
-    regex_match: Option<&'a Regex>,
+    regex_match: Option<Arc<Regex>>,
 }
 
-impl<'a> Deref for Request<'a> {
+impl Deref for Request {
     type Target = HyperRequest;
 
     fn deref(&self) -> &Self::Target {
@@ -118,13 +120,13 @@ impl<'a> Deref for Request<'a> {
     }
 }
 
-impl<'a> DerefMut for Request<'a> {
+impl DerefMut for Request {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<'a> From<HyperRequest> for Request<'a> {
+impl From<HyperRequest> for Request {
     fn from(t: HyperRequest) -> Self {
         Request {
             inner: t,
@@ -133,8 +135,8 @@ impl<'a> From<HyperRequest> for Request<'a> {
     }
 }
 
-impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
-    fn from(t: (HyperRequest, Option<&'a Regex>)) -> Self {
+impl From<(HyperRequest, Option<Arc<Regex>>)> for Request {
+    fn from(t: (HyperRequest, Option<Arc<Regex>>)) -> Self {
         Request {
             inner: t.0,
             regex_match: t.1,
@@ -142,11 +144,11 @@ impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
     }
 }
 
-impl<'a> Request<'a> {
+impl Request {
     /// Captures (if any) from the matched path regex
 
     pub fn captures(&self) -> Option<Captures> {
-        self.regex_match.and_then(|r| r.captures(self.path()))
+        self.regex_match.as_ref().and_then(|r| r.captures(self.path()))
     }
 
     /// Parsed capture segments
@@ -300,7 +302,7 @@ macro_rules! build {
         pub struct Router {
             not_found: Box<Handler>,
             $(
-                $regexes_for_x: Option<Vec<Regex>>,
+                $regexes_for_x: Option<Vec<Arc<Regex>>>,
                 $regex_set_for_x: Option<RegexSet>,
                 $priorities_for_x: Option<Vec<usize>>,
                 $handlers_for_x: Option<Vec<Box<Handler>>>
@@ -402,7 +404,7 @@ macro_rules! build {
                         $regexes_for_x = {
                             let mut out = Vec::new();
                             for s in &ss {
-                                out.push(Regex::new(s)?);
+                                out.push(Arc::new(Regex::new(s)?));
                             }
                             Some(out)
                         };
@@ -425,7 +427,7 @@ macro_rules! build {
 
         impl Router {
 
-            fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<&'a Regex>) {
+            fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<Arc<Regex>>) {
                 match *req.method() {
                     $(
                         $hyper_method => {
@@ -437,7 +439,7 @@ macro_rules! build {
                                 }) {
                                 let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
                                 let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
-                                return (handler, Some(regex));
+                                return (handler, Some(regex.clone()));
                             }
                         },
                     )+
