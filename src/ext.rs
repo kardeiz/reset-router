@@ -148,7 +148,7 @@ impl RouterExtensions for super::Router {
         use hyper::server::Http;
         use self::net2::unix::UnixTcpBuilderExt;
 
-        let core_gen_ref = Arc::new(core_gen);
+
 
         fn inner(
             addr: &SocketAddr,
@@ -176,6 +176,7 @@ impl RouterExtensions for super::Router {
 
         let protocol = Arc::new(Http::new());
         let router = Arc::new(self);
+        let core_gen_ref = Arc::new(core_gen);
 
         for _ in 0..(num_threads - 1) {
             let protocol_c = protocol.clone();
