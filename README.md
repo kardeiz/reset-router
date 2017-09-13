@@ -31,6 +31,6 @@ router.quick_serve(8, "0.0.0.0:3000".parse().unwrap(), || Core::new().unwrap() )
 
 See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for examples.
 
-
+Also check out the `await` branch, which modifies a few things to make the router work more nicely with `futures-await`.
 
 License: MIT
