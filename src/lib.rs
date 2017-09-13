@@ -86,7 +86,18 @@ pub mod err {
 #[cfg(feature = "ext")]
 pub mod ext;
 
-pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E> + Send>;
+pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
+
+pub trait FutureExt: Future {
+    fn into_box(self) -> BoxFuture<Self::Item, Self::Error>
+    where
+        Self: Sized + 'static,
+    {
+        Box::new(self)
+    }
+}
+
+impl<F: Future> FutureExt for F {}
 
 use err::{Error, ErrorKind};
 
@@ -239,13 +250,41 @@ impl Router {
 
 /// Handle the request
 
-pub trait Handler: 'static + Send + Sync {
+pub trait IntoHandler {
+    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static;
+}
+
+impl<I, S, E, H> IntoHandler for H where
+    I: IntoFuture<Item=S, Error=E>,
+    I::Future: 'static,
+    S: IntoResponse,
+    E: IntoResponse,
+    H: Fn(Request) -> I + Sync + Send {
+
+    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
+        Box::new(move |req: Request| -> BoxFuture<Response, hyper::Error> {
+            (self)(req)
+                .into_future()
+                .map(|s| s.into_response())
+                .or_else(|e| Ok(e.into_response()))
+                .into_box()
+        })
+    }
+}
+
+impl IntoHandler for Box<Handler> {
+    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
+        self
+    }
+}
+
+pub trait Handler: Send + Sync {
     fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
 }
 
 impl<F> Handler for F
 where
-    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
+    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + Send + Sync,
 {
     fn handle(&self, req: Request) -> BoxFuture<Response, ::hyper::Error> {
         self(req)
@@ -253,22 +292,11 @@ where
 }
 
 impl<'a> RouterBuilder<'a> {
-    pub fn add_not_found<I, F, S, E, H>(mut self, handler: H) -> Self
+    pub fn add_not_found<H>(mut self, handler: H) -> Self
     where
-        I: IntoFuture<Future = F, Item = S, Error = E>,
-        F: Future<Item = S, Error = E> + 'static + Send,
-        S: IntoResponse,
-        E: IntoResponse,
-        H: Fn(Request) -> I + Sync + Send + 'static,
+        H: IntoHandler + 'static,
     {
-        self.not_found = Some(Box::new(move |req: Request| {
-            Box::new(
-                handler(req)
-                    .into_future()
-                    .map(|s| s.into_response())
-                    .or_else(|e| Ok(e.into_response())),
-            ) as BoxFuture<_, _>
-        }));
+        self.not_found = Some(handler.into_handler());
         self
     }
 }
@@ -339,12 +367,8 @@ macro_rules! build {
 
         impl<'a> RouterBuilder<'a> {
             $(
-                pub fn $add_x<I, F, S, E, H>(mut self, re: &'a str, handler: H) -> Self where
-                    I: IntoFuture<Future=F, Item=S, Error=E>,
-                    F: Future<Item = S, Error = E> + 'static + Send,
-                    S: IntoResponse,
-                    E: IntoResponse,
-                    H: Fn(Request) -> I + Sync + Send + 'static
+                pub fn $add_x<H>(mut self, re: &'a str, handler: H) -> Self where
+                    H: IntoHandler + 'static
                  {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
@@ -353,11 +377,7 @@ macro_rules! build {
                     strs.push(re);
                     priorities.push(0);
 
-                    handlers.push(Box::new(move |req: Request| 
-                        Box::new(handler(req)
-                            .into_future()
-                            .map(|s| s.into_response() )
-                            .or_else(|e| Ok(e.into_response()))) as BoxFuture<_, _>));
+                    handlers.push(handler.into_handler());
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);
@@ -368,12 +388,8 @@ macro_rules! build {
             )*
 
             $(
-                pub fn $add_x_with_priority<I, F, S, E, H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
-                    I: IntoFuture<Future=F, Item=S, Error=E>,
-                    F: Future<Item = S, Error = E> + 'static + Send,
-                    S: IntoResponse,
-                    E: IntoResponse,
-                    H: Fn(Request) -> I + Sync + Send + 'static
+                pub fn $add_x_with_priority<H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
+                    H: IntoHandler + 'static
                  {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
@@ -381,11 +397,7 @@ macro_rules! build {
 
                     strs.push(re);
                     priorities.push(priority);
-                    handlers.push(Box::new(move |req: Request| 
-                        Box::new(handler(req)
-                            .into_future()
-                            .map(|s| s.into_response() )
-                            .or_else(|e| Ok(e.into_response()))) as BoxFuture<_, _>));
+                    handlers.push(handler.into_handler());
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);

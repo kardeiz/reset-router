@@ -19,7 +19,7 @@ serde = { version = "1.0.11", optional = true }
 
 [dependencies.cookie]
 optional = true
-version = "0.9.1"
+version = "0.10.0"
 
 [dependencies.net2]
 optional = true
