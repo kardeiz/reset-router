@@ -177,6 +177,20 @@ impl Request {
     pub fn into_inner(self) -> HyperRequest {
         self.inner
     }
+
+    pub fn split_body(mut self) -> (Self, ::hyper::Body) {
+        let Request { inner, regex_match } = self;
+        let (method, uri, version, headers, body) = inner.deconstruct();
+
+        let mut inner = HyperRequest::new(method, uri);
+        *inner.headers_mut() = headers;
+        inner.set_version(version);
+
+        let new = Request { inner, regex_match };
+        (new, body)
+    }
+
+
 }
 
 /// Trait to provide parsed captures from path
