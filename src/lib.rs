@@ -50,6 +50,8 @@ use futures::{Future, IntoFuture};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
+use std::sync::Arc;
+
 pub mod err {
 
     //! Error handling with `error-chain`
@@ -84,7 +86,18 @@ pub mod err {
 #[cfg(feature = "ext")]
 pub mod ext;
 
-pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E> + Send>;
+pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
+
+pub trait FutureExt: Future {
+    fn into_box(self) -> BoxFuture<Self::Item, Self::Error>
+    where
+        Self: Sized + 'static,
+    {
+        Box::new(self)
+    }
+}
+
+impl<F: Future> FutureExt for F {}
 
 use err::{Error, ErrorKind};
 
@@ -105,12 +118,12 @@ where
 
 /// Hyper `Request` and the matching regex
 
-pub struct Request<'a> {
+pub struct Request {
     inner: HyperRequest,
-    regex_match: Option<&'a Regex>,
+    regex_match: Option<Arc<Regex>>,
 }
 
-impl<'a> Deref for Request<'a> {
+impl Deref for Request {
     type Target = HyperRequest;
 
     fn deref(&self) -> &Self::Target {
@@ -118,13 +131,13 @@ impl<'a> Deref for Request<'a> {
     }
 }
 
-impl<'a> DerefMut for Request<'a> {
+impl DerefMut for Request {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<'a> From<HyperRequest> for Request<'a> {
+impl From<HyperRequest> for Request {
     fn from(t: HyperRequest) -> Self {
         Request {
             inner: t,
@@ -133,8 +146,8 @@ impl<'a> From<HyperRequest> for Request<'a> {
     }
 }
 
-impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
-    fn from(t: (HyperRequest, Option<&'a Regex>)) -> Self {
+impl From<(HyperRequest, Option<Arc<Regex>>)> for Request {
+    fn from(t: (HyperRequest, Option<Arc<Regex>>)) -> Self {
         Request {
             inner: t.0,
             regex_match: t.1,
@@ -142,11 +155,11 @@ impl<'a> From<(HyperRequest, Option<&'a Regex>)> for Request<'a> {
     }
 }
 
-impl<'a> Request<'a> {
+impl Request {
     /// Captures (if any) from the matched path regex
 
     pub fn captures(&self) -> Option<Captures> {
-        self.regex_match.and_then(|r| r.captures(self.path()))
+        self.regex_match.as_ref().and_then(|r| r.captures(self.path()))
     }
 
     /// Parsed capture segments
@@ -164,6 +177,20 @@ impl<'a> Request<'a> {
     pub fn into_inner(self) -> HyperRequest {
         self.inner
     }
+
+    pub fn split_body(mut self) -> (Self, ::hyper::Body) {
+        let Request { inner, regex_match } = self;
+        let (method, uri, version, headers, body) = inner.deconstruct();
+
+        let mut inner = HyperRequest::new(method, uri);
+        *inner.headers_mut() = headers;
+        inner.set_version(version);
+
+        let new = Request { inner, regex_match };
+        (new, body)
+    }
+
+
 }
 
 /// Trait to provide parsed captures from path
@@ -237,13 +264,41 @@ impl Router {
 
 /// Handle the request
 
-pub trait Handler: 'static + Send + Sync {
+pub trait IntoHandler {
+    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static;
+}
+
+impl<I, S, E, H> IntoHandler for H where
+    I: IntoFuture<Item=S, Error=E>,
+    I::Future: 'static,
+    S: IntoResponse,
+    E: IntoResponse,
+    H: Fn(Request) -> I + Sync + Send {
+
+    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
+        Box::new(move |req: Request| -> BoxFuture<Response, hyper::Error> {
+            (self)(req)
+                .into_future()
+                .map(|s| s.into_response())
+                .or_else(|e| Ok(e.into_response()))
+                .into_box()
+        })
+    }
+}
+
+impl IntoHandler for Box<Handler> {
+    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
+        self
+    }
+}
+
+pub trait Handler: Send + Sync {
     fn handle(&self, Request) -> BoxFuture<Response, ::hyper::Error>;
 }
 
 impl<F> Handler for F
 where
-    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + 'static + Send + Sync,
+    F: Fn(Request) -> BoxFuture<Response, ::hyper::Error> + Send + Sync,
 {
     fn handle(&self, req: Request) -> BoxFuture<Response, ::hyper::Error> {
         self(req)
@@ -251,22 +306,11 @@ where
 }
 
 impl<'a> RouterBuilder<'a> {
-    pub fn add_not_found<I, F, S, E, H>(mut self, handler: H) -> Self
+    pub fn add_not_found<H>(mut self, handler: H) -> Self
     where
-        I: IntoFuture<Future = F, Item = S, Error = E>,
-        F: Future<Item = S, Error = E> + 'static + Send,
-        S: IntoResponse,
-        E: IntoResponse,
-        H: Fn(Request) -> I + Sync + Send + 'static,
+        H: IntoHandler + 'static,
     {
-        self.not_found = Some(Box::new(move |req: Request| {
-            Box::new(
-                handler(req)
-                    .into_future()
-                    .map(|s| s.into_response())
-                    .or_else(|e| Ok(e.into_response())),
-            ) as BoxFuture<_, _>
-        }));
+        self.not_found = Some(handler.into_handler());
         self
     }
 }
@@ -300,7 +344,7 @@ macro_rules! build {
         pub struct Router {
             not_found: Box<Handler>,
             $(
-                $regexes_for_x: Option<Vec<Regex>>,
+                $regexes_for_x: Option<Vec<Arc<Regex>>>,
                 $regex_set_for_x: Option<RegexSet>,
                 $priorities_for_x: Option<Vec<usize>>,
                 $handlers_for_x: Option<Vec<Box<Handler>>>
@@ -337,12 +381,8 @@ macro_rules! build {
 
         impl<'a> RouterBuilder<'a> {
             $(
-                pub fn $add_x<I, F, S, E, H>(mut self, re: &'a str, handler: H) -> Self where
-                    I: IntoFuture<Future=F, Item=S, Error=E>,
-                    F: Future<Item = S, Error = E> + 'static + Send,
-                    S: IntoResponse,
-                    E: IntoResponse,
-                    H: Fn(Request) -> I + Sync + Send + 'static
+                pub fn $add_x<H>(mut self, re: &'a str, handler: H) -> Self where
+                    H: IntoHandler + 'static
                  {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
@@ -351,11 +391,7 @@ macro_rules! build {
                     strs.push(re);
                     priorities.push(0);
 
-                    handlers.push(Box::new(move |req: Request| 
-                        Box::new(handler(req)
-                            .into_future()
-                            .map(|s| s.into_response() )
-                            .or_else(|e| Ok(e.into_response()))) as BoxFuture<_, _>));
+                    handlers.push(handler.into_handler());
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);
@@ -366,12 +402,8 @@ macro_rules! build {
             )*
 
             $(
-                pub fn $add_x_with_priority<I, F, S, E, H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
-                    I: IntoFuture<Future=F, Item=S, Error=E>,
-                    F: Future<Item = S, Error = E> + 'static + Send,
-                    S: IntoResponse,
-                    E: IntoResponse,
-                    H: Fn(Request) -> I + Sync + Send + 'static
+                pub fn $add_x_with_priority<H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
+                    H: IntoHandler + 'static
                  {
                     let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
                     let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
@@ -379,11 +411,7 @@ macro_rules! build {
 
                     strs.push(re);
                     priorities.push(priority);
-                    handlers.push(Box::new(move |req: Request| 
-                        Box::new(handler(req)
-                            .into_future()
-                            .map(|s| s.into_response() )
-                            .or_else(|e| Ok(e.into_response()))) as BoxFuture<_, _>));
+                    handlers.push(handler.into_handler());
 
                     self.$strs_for_x = Some(strs);
                     self.$priorities_for_x = Some(priorities);
@@ -402,7 +430,7 @@ macro_rules! build {
                         $regexes_for_x = {
                             let mut out = Vec::new();
                             for s in &ss {
-                                out.push(Regex::new(s)?);
+                                out.push(Arc::new(Regex::new(s)?));
                             }
                             Some(out)
                         };
@@ -425,7 +453,7 @@ macro_rules! build {
 
         impl Router {
 
-            fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<&'a Regex>) {
+            fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<Arc<Regex>>) {
                 match *req.method() {
                     $(
                         $hyper_method => {
@@ -437,7 +465,7 @@ macro_rules! build {
                                 }) {
                                 let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
                                 let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
-                                return (handler, Some(regex));
+                                return (handler, Some(regex.clone()));
                             }
                         },
                     )+
