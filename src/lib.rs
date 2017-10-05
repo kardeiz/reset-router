@@ -83,8 +83,8 @@ pub mod err {
 
 }
 
-#[cfg(feature = "ext")]
-pub mod ext;
+// #[cfg(feature = "ext")]
+// pub mod ext;
 
 pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
 
@@ -256,12 +256,6 @@ where
     }
 }
 
-impl Router {
-    pub fn build<'a>() -> RouterBuilder<'a> {
-        RouterBuilder::default()
-    }
-}
-
 /// Handle the request
 
 pub trait IntoHandler {
@@ -328,162 +322,138 @@ impl Service for Router {
     }
 }
 
-
-macro_rules! build {
-    ($([$regex_set_for_x:ident,
-        $regexes_for_x:ident,
-        $priorities_for_x:ident,
-        $handlers_for_x:ident,
-        $strs_for_x:ident,
-        $add_x:ident,
-        $add_x_with_priority:ident,
-        $hyper_method:pat]),+) => {
-
-        /// The "finished" `Router`. See [`RouterBuilder`](/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
-
-        pub struct Router {
-            not_found: Box<Handler>,
-            $(
-                $regexes_for_x: Option<Vec<Arc<Regex>>>,
-                $regex_set_for_x: Option<RegexSet>,
-                $priorities_for_x: Option<Vec<usize>>,
-                $handlers_for_x: Option<Vec<Box<Handler>>>
-            ),+
-        }
-
-        /// Builder for a [`Router`](/reset_router/struct.Router.html)
-        ///
-        /// Please note that you can assign a priority to a handler with, e.g., `add_get_with_priority`.
-        ///
-        /// Default priority is 0. Lowest priority (closer to 0) wins.
-
-        pub struct RouterBuilder<'a> {
-            not_found: Option<Box<Handler>>,
-            $(
-                $strs_for_x: Option<Vec<&'a str>>,
-                $priorities_for_x: Option<Vec<usize>>,
-                $handlers_for_x: Option<Vec<Box<Handler>>>
-            ),+
-        }
-
-        impl<'a> std::default::Default for RouterBuilder<'a> {
-            fn default() -> Self {
-                RouterBuilder {
-                    not_found: None,
-                    $(
-                        $strs_for_x: None,
-                        $priorities_for_x: None,
-                        $handlers_for_x: None
-                    ),+
-                }
-            }
-        }
-
-        impl<'a> RouterBuilder<'a> {
-            $(
-                pub fn $add_x<H>(mut self, re: &'a str, handler: H) -> Self where
-                    H: IntoHandler + 'static
-                 {
-                    let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
-                    let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
-                    let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
-
-                    strs.push(re);
-                    priorities.push(0);
-
-                    handlers.push(handler.into_handler());
-
-                    self.$strs_for_x = Some(strs);
-                    self.$priorities_for_x = Some(priorities);
-                    self.$handlers_for_x = Some(handlers);
-
-                    self
-                }
-            )*
-
-            $(
-                pub fn $add_x_with_priority<H>(mut self, re: &'a str, priority: usize, handler: H) -> Self where
-                    H: IntoHandler + 'static
-                 {
-                    let mut strs = self.$strs_for_x.take().unwrap_or_else(Vec::new);
-                    let mut priorities = self.$priorities_for_x.take().unwrap_or_else(Vec::new);
-                    let mut handlers = self.$handlers_for_x.take().unwrap_or_else(Vec::new);
-
-                    strs.push(re);
-                    priorities.push(priority);
-                    handlers.push(handler.into_handler());
-
-                    self.$strs_for_x = Some(strs);
-                    self.$priorities_for_x = Some(priorities);
-                    self.$handlers_for_x = Some(handlers);
-
-                    self
-                }
-            )*
-
-            pub fn finish(self) -> ::err::Result<Router> {
-                $(
-                    let mut $regex_set_for_x = None;
-                    let mut $regexes_for_x = None;
-                    if let Some(ss) = self.$strs_for_x {
-                        $regex_set_for_x = Some(RegexSet::new(ss.iter())?);
-                        $regexes_for_x = {
-                            let mut out = Vec::new();
-                            for s in &ss {
-                                out.push(Arc::new(Regex::new(s)?));
-                            }
-                            Some(out)
-                        };
-                    }
-                )+
-
-                let out = Router {
-                    not_found: self.not_found.ok_or(::err::ErrorKind::NotFoundNotSet)?,
-                    $(
-                        $regex_set_for_x: $regex_set_for_x,
-                        $regexes_for_x: $regexes_for_x,
-                        $priorities_for_x: self.$priorities_for_x,
-                        $handlers_for_x: self.$handlers_for_x
-                    ),*
-                };
-
-                Ok(out)
-            }
-        }
-
-        impl Router {
-
-            fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<Arc<Regex>>) {
-                match *req.method() {
-                    $(
-                        $hyper_method => {
-                            if let Some(i) = self.$regex_set_for_x.iter()
-                                .flat_map(|s| s.matches(req.path()) )
-                                .min_by(|x, y| {
-                                    let priorities_opt = self.$priorities_for_x.as_ref();
-                                    (&priorities_opt.unwrap()[*x]).cmp(&priorities_opt.unwrap()[*y])
-                                }) {
-                                let handler = &self.$handlers_for_x.as_ref().unwrap()[i];
-                                let regex = &self.$regexes_for_x.as_ref().unwrap()[i];
-                                return (handler, Some(regex.clone()));
-                            }
-                        },
-                    )+
-                    _ => {}
-                }
-                return (&self.not_found, None);
-            }
-
-        }
-
-    }
+pub struct PathMatcher {
+    regex_set: RegexSet,
+    regexes: Vec<Arc<Regex>>,
+    priorities: Vec<usize>,
+    handlers: Vec<Box<Handler>>
 }
 
-build!{
-    [regex_set_for_gets, regexes_for_gets, priorities_for_gets, handlers_for_gets, strs_for_gets, add_get, add_get_with_priority, Method::Get],
-    [regex_set_for_posts, regexes_for_posts, priorities_for_posts, handlers_for_posts, strs_for_posts, add_post, add_post_with_priority, Method::Post],
-    [regex_set_for_puts, regexes_for_puts, priorities_for_puts, handlers_for_puts, strs_for_puts, add_put, add_put_with_priority, Method::Put],
-    [regex_set_for_patchs, regexes_for_patchs, priorities_for_patchs, handlers_for_patchs, strs_for_patchs, add_patch, add_patch_with_priority, Method::Patch],
-    [regex_set_for_heads, regexes_for_heads, priorities_for_heads, handlers_for_heads, strs_for_heads, add_head, add_head_with_priority, Method::Head],
-    [regex_set_for_deletes, regexes_for_deletes, priorities_for_deletes, handlers_for_deletes, strs_for_deletes, add_delete, add_delete_with_priority, Method::Delete]
+/// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
+
+pub struct Router {
+    not_found: Box<Handler>,
+    gets: Option<PathMatcher>,
+    posts: Option<PathMatcher>,
+    puts: Option<PathMatcher>,
+    patches: Option<PathMatcher>,
+    heads: Option<PathMatcher>,
+    deletes: Option<PathMatcher>
+}
+
+impl Router {
+
+    pub fn build<'a>() -> RouterBuilder<'a> {
+        RouterBuilder::default()
+    }
+
+    fn base(not_found: Box<Handler>) -> Self {
+        Router { 
+            not_found, 
+            gets: None, 
+            posts: None, 
+            puts: None, 
+            patches: None, 
+            heads: None, 
+            deletes: None
+        }
+    }
+
+    fn path_matcher_for(&self, method: &Method) -> &Option<PathMatcher> {
+        match *method {
+            Method::Get => &self.gets,
+            Method::Post => &self.posts,
+            Method::Put => &self.puts,
+            Method::Patch => &self.patches,
+            Method::Head => &self.heads,
+            Method::Delete => &self.deletes,
+            _ => unimplemented!()
+        }
+    }
+
+    fn path_matcher_for_mut(&mut self, method: &Method) -> &mut Option<PathMatcher> {
+        match *method {
+            Method::Get => &mut self.gets,
+            Method::Post => &mut self.posts,
+            Method::Put => &mut self.puts,
+            Method::Patch => &mut self.patches,
+            Method::Head => &mut self.heads,
+            Method::Delete => &mut self.deletes,
+            _ => unimplemented!()
+        }
+    }
+
+    fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<Arc<Regex>>) {
+        if let Some(ref path_matcher) = *self.path_matcher_for(req.method()) {
+            let priorities = &path_matcher.priorities;
+            if let Some(i) = path_matcher.regex_set.matches(req.path())
+                .iter()
+                .min_by(|x, y| priorities[*x].cmp(&priorities[*y]) ) {
+
+                let handler = &path_matcher.handlers[i];
+                let regex = &path_matcher.regexes[i];
+                return (handler, Some(regex.clone()));
+            }
+        }
+        (&self.not_found, None)
+    }
+
+}
+
+/// Builder for a [`Router`](/reset-router/*/reset_router/struct.Router.html)
+///
+/// Please note that you can assign a priority to a handler with `add_with_priority`.
+///
+/// Default priority is 0. Lowest priority (closer to 0) wins.
+
+#[derive(Default)]
+pub struct RouterBuilder<'a> {
+    not_found: Option<Box<Handler>>,
+    route_parts: Vec<(Method, &'a str, usize, Box<Handler>)>
+}
+
+impl<'a> RouterBuilder<'a> {
+    pub fn add<H>(mut self, method: Method, regex: &'a str, handler: H) -> Self where
+        H: IntoHandler + 'static {
+        self.route_parts.push((method, regex, 0, handler.into_handler()));
+        self
+    }
+
+    pub fn add_with_priority<H>(mut self, method: Method, regex: &'a str, priority: usize, handler: H) -> Self where
+        H: IntoHandler + 'static {
+        self.route_parts.push((method, regex, priority, handler.into_handler()));
+        self
+    }
+
+    pub fn finish(self) -> ::err::Result<Router> {
+        
+        let not_found = self.not_found.ok_or(::err::ErrorKind::NotFoundNotSet)?;
+
+        let mut router = Router::base(not_found);
+
+        let mut map = ::std::collections::HashMap::new();
+
+        for (method, path, priority, handler) in self.route_parts {
+            let &mut (ref mut paths, ref mut priorities, ref mut handlers) = 
+                map.entry(method).or_insert_with(|| (Vec::new(), Vec::new(), Vec::new() ) );
+            paths.push(path);
+            priorities.push(priority);
+            handlers.push(handler);
+        }
+
+        for (method, (paths, priorities, handlers)) in map {
+            let regex_set = RegexSet::new(paths.iter())?;
+            let mut regexes = Vec::new();
+            for path in paths.iter() {
+                regexes.push(Arc::new(Regex::new(path)?));
+            }
+
+            let path_matcher = PathMatcher { regex_set, regexes, priorities, handlers };
+
+            *router.path_matcher_for_mut(&method) = Some(path_matcher);
+        }
+
+        Ok(router)
+    }
+
 }
