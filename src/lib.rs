@@ -20,7 +20,7 @@
 //!
 //! ```rust,ignore
 //! let router = Router::build()
-//!     .add(r"\A/\z", |_| Ok::<_, Response>(Response::new().with_body("ROOT path")))
+//!     .add(Method::Get, r"\A/\z", |_| Ok::<_, Response>(Response::new().with_body("ROOT path")))
 //!     .add_not_found(|_| Ok::<_, Response>(Response::new().with_body("Route not found")))
 //!     .finish()
 //!     .unwrap();
@@ -83,8 +83,8 @@ pub mod err {
 
 }
 
-// #[cfg(feature = "ext")]
-// pub mod ext;
+#[cfg(feature = "ext")]
+pub mod ext;
 
 pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
 
@@ -178,7 +178,7 @@ impl Request {
         self.inner
     }
 
-    pub fn split_body(mut self) -> (Self, ::hyper::Body) {
+    pub fn split_body(self) -> (Self, ::hyper::Body) {
         let Request { inner, regex_match } = self;
         let (method, uri, version, headers, body) = inner.deconstruct();
 
@@ -299,16 +299,6 @@ where
     }
 }
 
-impl<'a> RouterBuilder<'a> {
-    pub fn add_not_found<H>(mut self, handler: H) -> Self
-    where
-        H: IntoHandler + 'static,
-    {
-        self.not_found = Some(handler.into_handler());
-        self
-    }
-}
-
 impl Service for Router {
     type Request = HyperRequest;
     type Response = Response;
@@ -413,6 +403,15 @@ pub struct RouterBuilder<'a> {
 }
 
 impl<'a> RouterBuilder<'a> {
+    
+    pub fn add_not_found<H>(mut self, handler: H) -> Self
+    where
+        H: IntoHandler + 'static,
+    {
+        self.not_found = Some(handler.into_handler());
+        self
+    }
+
     pub fn add<H>(mut self, method: Method, regex: &'a str, handler: H) -> Self where
         H: IntoHandler + 'static {
         self.route_parts.push((method, regex, 0, handler.into_handler()));

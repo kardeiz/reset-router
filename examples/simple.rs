@@ -21,6 +21,7 @@ use futures::{BoxFuture, Future};
 #[macro_use]
 extern crate lazy_static;
 
+use hyper::Method;
 use hyper::header::{ContentLength, ContentType};
 
 pub mod err {
@@ -170,10 +171,10 @@ fn main() {
     let addr = "0.0.0.0:3000".parse().unwrap();
 
     let router = Router::build()
-        .add_get(r"\A/assets/(.+)\z", assets)
-        .add_get(r"\A/json/*\z", json)
-        .add_get(r"\A/other\z", other)
-        .add_post(r"\A/post_body\z", post_body)
+        .add(Method::Get, r"\A/assets/(.+)\z", assets)
+        .add(Method::Get, r"\A/json/*\z", json)
+        .add(Method::Get, r"\A/other\z", other)
+        .add(Method::Post, r"\A/post_body\z", post_body)
         .add_not_found(not_found)
         .finish()
         .unwrap();
