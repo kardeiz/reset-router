@@ -88,17 +88,6 @@ pub mod ext;
 
 pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
 
-pub trait FutureExt: Future {
-    fn into_box(self) -> BoxFuture<Self::Item, Self::Error>
-    where
-        Self: Sized + 'static,
-    {
-        Box::new(self)
-    }
-}
-
-impl<F: Future> FutureExt for F {}
-
 use err::{Error, ErrorKind};
 
 /// Something that can be converted into a `Response` (cannot fail)
@@ -271,11 +260,10 @@ impl<I, S, E, H> IntoHandler for H where
 
     fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
         Box::new(move |req: Request| -> BoxFuture<Response, hyper::Error> {
-            (self)(req)
+            Box::new((self)(req)
                 .into_future()
                 .map(|s| s.into_response())
-                .or_else(|e| Ok(e.into_response()))
-                .into_box()
+                .or_else(|e| Ok(e.into_response())))
         })
     }
 }
@@ -312,6 +300,43 @@ impl Service for Router {
     }
 }
 
+#[derive(Default)]
+pub struct MethodMap<T> {
+    get: T,
+    post: T,
+    put: T,
+    patch: T,
+    head: T,
+    delete: T
+}
+
+impl<T> MethodMap<T> {
+    fn get(&self, method: &Method) -> &T {
+        match *method {
+            Method::Get => &self.get,
+            Method::Post => &self.post,
+            Method::Put => &self.put,
+            Method::Patch => &self.patch,
+            Method::Head => &self.head,
+            Method::Delete => &self.delete,
+            _ => unimplemented!()
+        }
+    }
+
+    fn get_mut(&mut self, method: &Method) -> &mut T {
+        match *method {
+            Method::Get => &mut self.get,
+            Method::Post => &mut self.post,
+            Method::Put => &mut self.put,
+            Method::Patch => &mut self.patch,
+            Method::Head => &mut self.head,
+            Method::Delete => &mut self.delete,
+            _ => unimplemented!()
+        }
+    }
+}
+
+
 pub struct PathMatcher {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
@@ -323,12 +348,7 @@ pub struct PathMatcher {
 
 pub struct Router {
     not_found: Box<Handler>,
-    gets: Option<PathMatcher>,
-    posts: Option<PathMatcher>,
-    puts: Option<PathMatcher>,
-    patches: Option<PathMatcher>,
-    heads: Option<PathMatcher>,
-    deletes: Option<PathMatcher>
+    handlers: MethodMap<Option<PathMatcher>>
 }
 
 impl Router {
@@ -340,41 +360,12 @@ impl Router {
     fn base(not_found: Box<Handler>) -> Self {
         Router { 
             not_found, 
-            gets: None, 
-            posts: None, 
-            puts: None, 
-            patches: None, 
-            heads: None, 
-            deletes: None
-        }
-    }
-
-    fn path_matcher_for(&self, method: &Method) -> &Option<PathMatcher> {
-        match *method {
-            Method::Get => &self.gets,
-            Method::Post => &self.posts,
-            Method::Put => &self.puts,
-            Method::Patch => &self.patches,
-            Method::Head => &self.heads,
-            Method::Delete => &self.deletes,
-            _ => unimplemented!()
-        }
-    }
-
-    fn path_matcher_for_mut(&mut self, method: &Method) -> &mut Option<PathMatcher> {
-        match *method {
-            Method::Get => &mut self.gets,
-            Method::Post => &mut self.posts,
-            Method::Put => &mut self.puts,
-            Method::Patch => &mut self.patches,
-            Method::Head => &mut self.heads,
-            Method::Delete => &mut self.deletes,
-            _ => unimplemented!()
+            handlers: MethodMap::default()      
         }
     }
 
     fn handler_and_regex_for<'a>(&'a self, req: &HyperRequest) -> (&'a Box<Handler>, Option<Arc<Regex>>) {
-        if let Some(ref path_matcher) = *self.path_matcher_for(req.method()) {
+        if let Some(ref path_matcher) = *self.handlers.get(req.method()) {
             let priorities = &path_matcher.priorities;
             if let Some(i) = path_matcher.regex_set.matches(req.path())
                 .iter()
@@ -449,7 +440,7 @@ impl<'a> RouterBuilder<'a> {
 
             let path_matcher = PathMatcher { regex_set, regexes, priorities, handlers };
 
-            *router.path_matcher_for_mut(&method) = Some(path_matcher);
+            *router.handlers.get_mut(&method) = Some(path_matcher);
         }
 
         Ok(router)
