@@ -245,40 +245,6 @@ where
     }
 }
 
-// type LocalService = Service<Request=HyperRequest, Response=Response, Error=::hyper::Error, Future=BoxFuture<Response, ::hyper::Error>>;
-
-// pub struct Handlet<T>(pub T);
-
-// pub trait IntoHandlet {
-//     fn into_handler(self) -> Box<Handler> where Self: Sized + 'static;
-// }
-
-/// Handle the request
-
-// pub trait IntoBoxedService<S: Service> {
-//     fn into_boxed_service(self) -> Box<S> where Self: Sized + 'static;
-// }
-
-// impl<I, R, E, H, S> IntoBoxedService<S> for H where
-//     I: IntoFuture<Item=R, Error=E>,
-//     I::Future: 'static,
-//     R: IntoResponse,
-//     E: IntoResponse,
-//     H: Fn(Request) -> I + Sync + Send,
-//     S: Service<Request=Request, Response=Response, Error=::hyper::Error, Future=BoxFuture<Response, ::hyper::Error>> {
-
-//     fn into_boxed_service(self) -> Box<S> where Self: Sized + 'static {
-//         Box::new(move |req: Request| -> BoxFuture<Response, ::hyper::Error> {
-//             Box::new((self)(req)
-//                 .into_future()
-//                 .map(|s| s.into_response())
-//                 .or_else(|e| Ok(e.into_response())))
-//         })
-//     }
-// }
-
-
-
 pub trait IntoHandler {
     fn into_handler(self) -> Box<Handler> where Self: Sized + 'static;
 }
@@ -319,24 +285,6 @@ where
     }
 }
 
-pub enum Next {
-    Request(Request),
-    Response(BoxFuture<Response, ::hyper::Error>)
-}
-
-pub trait Filter: Send + Sync {
-    fn filter(&self, Request, Arc<Box<Handler>>) -> Next;
-}
-
-impl<F> Filter for F
-where
-    F: Fn(Request, Arc<Box<Handler>>) -> Next + Send + Sync,
-{
-    fn filter(&self, req: Request, handler: Arc<Box<Handler>>) -> Next {
-        (self)(req, handler)
-    }
-}
-
 impl Service for Router {
     type Request = HyperRequest;
     type Response = Response;
@@ -367,7 +315,6 @@ impl<T> MethodMap<T> {
             Method::Patch => &self.patch,
             Method::Head => &self.head,
             Method::Delete => &self.delete,
-            _ => unimplemented!()
         }
     }
 
@@ -379,7 +326,6 @@ impl<T> MethodMap<T> {
             Method::Patch => &mut self.patch,
             Method::Head => &mut self.head,
             Method::Delete => &mut self.delete,
-            _ => unimplemented!()
         }
     }
 }
@@ -392,18 +338,11 @@ pub struct PathHandlers {
     handlers: Vec<Arc<Box<Handler>>>
 }
 
-pub struct PathFilters {
-    regex_set: RegexSet,
-    filters: Vec<Arc<Box<Filter>>>
-}
-
-
 /// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
 
 pub struct Router {
     not_found: Arc<Box<Handler>>,
-    handlers: MethodMap<Option<PathHandlers>>,
-    filters: MethodMap<Option<PathFilters>>
+    handlers: MethodMap<Option<PathHandlers>>
 }
 
 impl Router {
@@ -415,8 +354,7 @@ impl Router {
     fn base(not_found: Box<Handler>) -> Self {
         Router { 
             not_found: Arc::new(not_found), 
-            handlers: MethodMap::default() ,
-            filters: MethodMap::default()     
+            handlers: MethodMap::default()    
         }
     }
 
@@ -435,31 +373,10 @@ impl Router {
         (self.not_found.clone(), None)
     }
 
-    fn filters_for(&self, req: &Request) -> Option<Vec<Arc<Box<Filter>>>> {
-        if let Some(ref path_filters) = *self.filters.get(req.method()) {
-            let filters = path_filters.regex_set.matches(req.path())
-                .into_iter()
-                .map(|i| path_filters.filters[i].clone() )
-                .collect();
-            Some(filters)
-        } else {
-            None
-        }
-    }
-
     fn handle(&self, req: HyperRequest) -> BoxFuture<Response, ::hyper::Error> {
 
         let (handler, regex_opt) = self.handler_and_regex_for(&req);
         let mut new_req = Request::from((req, regex_opt));
-
-        if let Some(filters) = self.filters_for(&new_req) {
-            for filter in filters {
-                match filter.filter(new_req, handler.clone()) {
-                    Next::Request(req) => { new_req = req; },
-                    Next::Response(res) => { return res; }
-                }
-            }
-        }
 
         handler.handle(new_req)
 
@@ -476,8 +393,7 @@ impl Router {
 #[derive(Default)]
 pub struct RouterBuilder<'a> {
     not_found: Option<Box<Handler>>,
-    path_handler_parts: Vec<(Method, &'a str, usize, Box<Handler>)>,
-    path_filter_parts: Vec<(Method, &'a str, usize, Box<Filter>)>
+    path_handler_parts: Vec<(Method, &'a str, usize, Box<Handler>)>
 }
 
 impl<'a> RouterBuilder<'a> {
@@ -487,12 +403,6 @@ impl<'a> RouterBuilder<'a> {
         H: IntoHandler + 'static,
     {
         self.not_found = Some(handler.into_handler());
-        self
-    }
-
-    pub fn add_filter<H>(mut self, method: Method, regex: &'a str, filter: H) -> Self where
-        H: Filter + 'static {
-        self.path_filter_parts.push((method, regex, 0, Box::new(filter)));
         self
     }
 
@@ -515,7 +425,6 @@ impl<'a> RouterBuilder<'a> {
         let mut router = Router::base(not_found);
 
         let mut path_handlers_map = ::std::collections::HashMap::new();
-        let mut path_filters_map = ::std::collections::HashMap::new();
 
         for (method, path, priority, handler) in self.path_handler_parts {
             let &mut (ref mut paths, ref mut priorities, ref mut handlers) = 
@@ -523,14 +432,6 @@ impl<'a> RouterBuilder<'a> {
             paths.push(path);
             priorities.push(priority);
             handlers.push(Arc::new(handler));
-        }
-
-        for (method, path, priority, filter) in self.path_filter_parts {
-            let &mut (ref mut paths, ref mut priorities, ref mut filters) = 
-                path_filters_map.entry(method).or_insert_with(|| (Vec::new(), Vec::new(), Vec::new() ) );
-            paths.push(path);
-            priorities.push(priority);
-            filters.push(Arc::new(filter));
         }
 
         for (method, (paths, priorities, handlers)) in path_handlers_map {
@@ -543,14 +444,6 @@ impl<'a> RouterBuilder<'a> {
             let path_handlers = PathHandlers { regex_set, regexes, priorities, handlers };
 
             *router.handlers.get_mut(&method) = Some(path_handlers);
-        }
-
-        for (method, (paths, priorities, filters)) in path_filters_map {
-            let regex_set = RegexSet::new(paths.iter())?;
-
-            let path_filters = PathFilters { regex_set, filters };
-
-            *router.filters.get_mut(&method) = Some(path_filters);
         }
 
         Ok(router)
