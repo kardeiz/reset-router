@@ -64,6 +64,9 @@ pub mod err {
             CapturesError {
                 description("Could not parse captures")
             }
+            MethodNotSupported {
+                description("Method not supported")
+            }
             Regex(t: String) {
                 description("regex error")
                 display("regex error: '{}'", t)
@@ -307,25 +310,27 @@ pub struct MethodMap<T> {
 }
 
 impl<T> MethodMap<T> {
-    fn get(&self, method: &Method) -> &T {
+    fn get(&self, method: &Method) -> ::err::Result<&T> {
         match *method {
-            Method::Get => &self.get,
-            Method::Post => &self.post,
-            Method::Put => &self.put,
-            Method::Patch => &self.patch,
-            Method::Head => &self.head,
-            Method::Delete => &self.delete,
+            Method::Get => Ok(&self.get),
+            Method::Post => Ok(&self.post),
+            Method::Put => Ok(&self.put),
+            Method::Patch => Ok(&self.patch),
+            Method::Head => Ok(&self.head),
+            Method::Delete => Ok(&self.delete),
+            _ => Err(ErrorKind::MethodNotSupported.into())
         }
     }
 
-    fn get_mut(&mut self, method: &Method) -> &mut T {
+    fn get_mut(&mut self, method: &Method) -> ::err::Result<&mut T> {
         match *method {
-            Method::Get => &mut self.get,
-            Method::Post => &mut self.post,
-            Method::Put => &mut self.put,
-            Method::Patch => &mut self.patch,
-            Method::Head => &mut self.head,
-            Method::Delete => &mut self.delete,
+            Method::Get => Ok(&mut self.get),
+            Method::Post => Ok(&mut self.post),
+            Method::Put => Ok(&mut self.put),
+            Method::Patch => Ok(&mut self.patch),
+            Method::Head => Ok(&mut self.head),
+            Method::Delete => Ok(&mut self.delete),
+            _ => Err(ErrorKind::MethodNotSupported.into())
         }
     }
 }
@@ -335,13 +340,13 @@ pub struct PathHandlers {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
     priorities: Vec<usize>,
-    handlers: Vec<Arc<Box<Handler>>>
+    handlers: Vec<Box<Handler>>
 }
 
 /// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
 
 pub struct Router {
-    not_found: Arc<Box<Handler>>,
+    not_found: Box<Handler>,
     handlers: MethodMap<Option<PathHandlers>>
 }
 
@@ -353,13 +358,14 @@ impl Router {
 
     fn base(not_found: Box<Handler>) -> Self {
         Router { 
-            not_found: Arc::new(not_found), 
+            not_found: not_found, 
             handlers: MethodMap::default()    
         }
     }
 
-    fn handler_and_regex_for(&self, req: &HyperRequest) -> (Arc<Box<Handler>>, Option<Arc<Regex>>) {
-        if let Some(ref path_handlers) = *self.handlers.get(req.method()) {
+    fn handle(&self, req: HyperRequest) -> BoxFuture<Response, ::hyper::Error> {
+
+        if let Some(ref path_handlers) = self.handlers.get(req.method()).ok().and_then(|x| x.as_ref()) {
             let priorities = &path_handlers.priorities;
             if let Some(i) = path_handlers.regex_set.matches(req.path())
                 .iter()
@@ -367,18 +373,13 @@ impl Router {
 
                 let handler = &path_handlers.handlers[i];
                 let regex = &path_handlers.regexes[i];
-                return (handler.clone(), Some(regex.clone()));
+
+                return handler.handle(Request::from((req, Some(regex.clone()))));
+
             }
         }
-        (self.not_found.clone(), None)
-    }
 
-    fn handle(&self, req: HyperRequest) -> BoxFuture<Response, ::hyper::Error> {
-
-        let (handler, regex_opt) = self.handler_and_regex_for(&req);
-        let mut new_req = Request::from((req, regex_opt));
-
-        handler.handle(new_req)
+        self.not_found.handle(Request::from((req, None)))
 
     }
 
@@ -431,7 +432,7 @@ impl<'a> RouterBuilder<'a> {
                 path_handlers_map.entry(method).or_insert_with(|| (Vec::new(), Vec::new(), Vec::new() ) );
             paths.push(path);
             priorities.push(priority);
-            handlers.push(Arc::new(handler));
+            handlers.push(handler);
         }
 
         for (method, (paths, priorities, handlers)) in path_handlers_map {
@@ -443,7 +444,7 @@ impl<'a> RouterBuilder<'a> {
 
             let path_handlers = PathHandlers { regex_set, regexes, priorities, handlers };
 
-            *router.handlers.get_mut(&method) = Some(path_handlers);
+            *router.handlers.get_mut(&method)? = Some(path_handlers);
         }
 
         Ok(router)

@@ -13,7 +13,9 @@ extern crate tokio_core;
 extern crate net2;
 extern crate serde_json;
 
-use reset_router::{Request, Response, Router, Handler, Next};
+use reset_router::{Request, Response, Router};
+
+use hyper::server::Service;
 
 use futures::Stream;
 use futures::{BoxFuture, Future};
@@ -165,11 +167,19 @@ fn assets(req: Request) -> BoxedResponse {
 
 }
 
-fn filter(req: Request, handler: ::std::sync::Arc<Box<Handler>>) -> Next {
-    println!("{:?}", req.path());
-    Next::Request(req)
-}
+struct Server(Router);
 
+impl Service for Server {
+    type Request = <Router as Service>::Request;
+    type Response = <Router as Service>::Response;
+    type Error = <Router as Service>::Error;
+    type Future = <Router as Service>::Future;
+
+    fn call(&self, req: Self::Request) -> Self::Future {        
+        println!("{:?}", &req.path());
+        self.0.call(req)
+    }
+}
 
 
 fn main() {
@@ -180,12 +190,11 @@ fn main() {
         .add(Method::Get, r"\A/json/*\z", json)
         .add(Method::Get, r"\A/other\z", other)
         .add(Method::Post, r"\A/post_body\z", post_body)
-        .add_filter(Method::Get, r"/js.*", filter)
         .add_not_found(not_found)
         .finish()
         .unwrap();
 
-    router.quick_serve(num_cpus::get() * 8, addr, || {
+    Server(router).quick_serve(num_cpus::get() * 8, addr, || {
         core_handling::local_core_take().unwrap()
     });
 }

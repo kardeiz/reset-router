@@ -10,6 +10,7 @@ use self::cookie::{Cookie, CookieJar};
 
 use hyper::header;
 use hyper::Response;
+use hyper::server::Service;
 
 use std::net::SocketAddr;
 use self::tokio_core::reactor::Core;
@@ -98,7 +99,7 @@ impl ResponseExtensions for Response {
     }
 }
 
-pub trait RouterExtensions {
+pub trait ServiceExtensions {
     fn quick_serve<F: Fn() -> Core + 'static + Send + Sync>(
         self,
         num_threads: usize,
@@ -107,7 +108,8 @@ pub trait RouterExtensions {
     ) -> ::err::Result<()>;
 }
 
-impl RouterExtensions for super::Router {
+impl<T: Service<Request=super::HyperRequest, Response=Response, Error=::hyper::Error> + Send + Sync + 'static> ServiceExtensions for T {
+    
     fn quick_serve<F: Fn() -> Core + 'static + Send + Sync>(
         self,
         num_threads: usize,
@@ -119,10 +121,10 @@ impl RouterExtensions for super::Router {
         use hyper::server::Http;
         use self::net2::unix::UnixTcpBuilderExt;
 
-        fn inner(
+        fn inner<U: Service<Request=super::HyperRequest, Response=Response, Error=::hyper::Error> + Send + Sync + 'static>(
             addr: &SocketAddr,
             protocol: Arc<Http>,
-            router: Arc<super::Router>,
+            service: Arc<U>,
             mut core: Core,
         ) -> ::err::Result<()> {
 
@@ -134,7 +136,7 @@ impl RouterExtensions for super::Router {
             let listener =
                 self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)?;
             core.run(listener.incoming().for_each(|(socket, addr)| {
-                protocol.bind_connection(&hdl, socket, addr, router.clone());
+                protocol.bind_connection(&hdl, socket, addr, service.clone());
                 Ok(())
             }))?;
 
@@ -142,20 +144,20 @@ impl RouterExtensions for super::Router {
         }
 
         let protocol = Arc::new(Http::new());
-        let router = Arc::new(self);
+        let service = Arc::new(self);
         let core_gen_ref = Arc::new(core_gen);
 
         for _ in 0..(num_threads - 1) {
             let protocol_c = protocol.clone();
-            let router_c = router.clone();
+            let service_c = service.clone();
             let core_gen_ref = core_gen_ref.clone();
             ::std::thread::spawn(move || -> ::err::Result<()> {
-                inner(&addr, protocol_c, router_c, core_gen_ref())?;
+                inner(&addr, protocol_c, service_c, core_gen_ref())?;
                 Ok(())
             });
         }
 
-        inner(&addr, protocol, router, core_gen_ref())?;
+        inner(&addr, protocol, service, core_gen_ref())?;
 
         Ok(())
 
