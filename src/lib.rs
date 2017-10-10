@@ -151,7 +151,9 @@ impl Request {
     /// Captures (if any) from the matched path regex
 
     pub fn captures(&self) -> Option<Captures> {
-        self.regex_match.as_ref().and_then(|r| r.captures(self.path()))
+        self.regex_match.as_ref().and_then(
+            |r| r.captures(self.path()),
+        )
     }
 
     /// Parsed capture segments
@@ -181,8 +183,6 @@ impl Request {
         let new = Request { inner, regex_match };
         (new, body)
     }
-
-
 }
 
 /// Trait to provide parsed captures from path
@@ -249,28 +249,39 @@ where
 }
 
 pub trait IntoHandler {
-    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static;
+    fn into_handler(self) -> Box<Handler>
+    where
+        Self: Sized + 'static;
 }
 
-impl<I, S, E, H> IntoHandler for H where
-    I: IntoFuture<Item=S, Error=E>,
+impl<I, S, E, H> IntoHandler for H
+where
+    I: IntoFuture<Item = S, Error = E>,
     I::Future: 'static,
     S: IntoResponse,
     E: IntoResponse,
-    H: Fn(Request) -> I + Sync + Send {
-
-    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
+    H: Fn(Request) -> I + Sync + Send,
+{
+    fn into_handler(self) -> Box<Handler>
+    where
+        Self: Sized + 'static,
+    {
         Box::new(move |req: Request| -> BoxFuture<Response, ::hyper::Error> {
-            Box::new((self)(req)
-                .into_future()
-                .map(|s| s.into_response())
-                .or_else(|e| Ok(e.into_response())))
+            Box::new(
+                (self)(req)
+                    .into_future()
+                    .map(|s| s.into_response())
+                    .or_else(|e| Ok(e.into_response())),
+            )
         })
     }
 }
 
 impl IntoHandler for Box<Handler> {
-    fn into_handler(self) -> Box<Handler> where Self: Sized + 'static {
+    fn into_handler(self) -> Box<Handler>
+    where
+        Self: Sized + 'static,
+    {
         self
     }
 }
@@ -294,7 +305,7 @@ impl Service for Router {
     type Error = hyper::Error;
     type Future = BoxFuture<Response, ::hyper::Error>;
 
-    fn call(&self, req: Self::Request) -> Self::Future {        
+    fn call(&self, req: Self::Request) -> Self::Future {
         self.handle(req)
     }
 }
@@ -306,7 +317,7 @@ pub struct MethodMap<T> {
     put: T,
     patch: T,
     head: T,
-    delete: T
+    delete: T,
 }
 
 impl<T> MethodMap<T> {
@@ -318,7 +329,7 @@ impl<T> MethodMap<T> {
             Method::Patch => Ok(&self.patch),
             Method::Head => Ok(&self.head),
             Method::Delete => Ok(&self.delete),
-            _ => Err(ErrorKind::MethodNotSupported.into())
+            _ => Err(ErrorKind::MethodNotSupported.into()),
         }
     }
 
@@ -330,7 +341,7 @@ impl<T> MethodMap<T> {
             Method::Patch => Ok(&mut self.patch),
             Method::Head => Ok(&mut self.head),
             Method::Delete => Ok(&mut self.delete),
-            _ => Err(ErrorKind::MethodNotSupported.into())
+            _ => Err(ErrorKind::MethodNotSupported.into()),
         }
     }
 }
@@ -340,36 +351,42 @@ pub struct PathHandlers {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
     priorities: Vec<usize>,
-    handlers: Vec<Box<Handler>>
+    handlers: Vec<Box<Handler>>,
 }
 
 /// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
 
 pub struct Router {
     not_found: Box<Handler>,
-    handlers: MethodMap<Option<PathHandlers>>
+    handlers: MethodMap<Option<PathHandlers>>,
 }
 
 impl Router {
-
     pub fn build<'a>() -> RouterBuilder<'a> {
         RouterBuilder::default()
     }
 
     fn base(not_found: Box<Handler>) -> Self {
-        Router { 
-            not_found: not_found, 
-            handlers: MethodMap::default()    
+        Router {
+            not_found: not_found,
+            handlers: MethodMap::default(),
         }
     }
 
     fn handle(&self, req: HyperRequest) -> BoxFuture<Response, ::hyper::Error> {
 
-        if let Some(ref path_handlers) = self.handlers.get(req.method()).ok().and_then(|x| x.as_ref()) {
+        if let Some(ref path_handlers) =
+            self.handlers.get(req.method()).ok().and_then(
+                |x| x.as_ref(),
+            )
+        {
             let priorities = &path_handlers.priorities;
-            if let Some(i) = path_handlers.regex_set.matches(req.path())
-                .iter()
-                .min_by(|x, y| priorities[*x].cmp(&priorities[*y]) ) {
+            if let Some(i) = path_handlers.regex_set.matches(req.path()).iter().min_by(
+                |x, y| {
+                    priorities[*x].cmp(&priorities[*y])
+                },
+            )
+            {
 
                 let handler = &path_handlers.handlers[i];
                 let regex = &path_handlers.regexes[i];
@@ -382,7 +399,6 @@ impl Router {
         self.not_found.handle(Request::from((req, None)))
 
     }
-
 }
 
 /// Builder for a [`Router`](/reset-router/*/reset_router/struct.Router.html)
@@ -390,15 +406,13 @@ impl Router {
 /// Please note that you can assign a priority to a handler with `add_with_priority`.
 ///
 /// Default priority is 0. Lowest priority (closer to 0) wins.
-
 #[derive(Default)]
 pub struct RouterBuilder<'a> {
     not_found: Option<Box<Handler>>,
-    path_handler_parts: Vec<(Method, &'a str, usize, Box<Handler>)>
+    path_handler_parts: Vec<(Method, &'a str, usize, Box<Handler>)>,
 }
 
 impl<'a> RouterBuilder<'a> {
-    
     pub fn add_not_found<H>(mut self, handler: H) -> Self
     where
         H: IntoHandler + 'static,
@@ -407,20 +421,40 @@ impl<'a> RouterBuilder<'a> {
         self
     }
 
-    pub fn add<H>(mut self, method: Method, regex: &'a str, handler: H) -> Self where
-        H: IntoHandler + 'static {
-        self.path_handler_parts.push((method, regex, 0, handler.into_handler()));
+    pub fn add<H>(mut self, method: Method, regex: &'a str, handler: H) -> Self
+    where
+        H: IntoHandler + 'static,
+    {
+        self.path_handler_parts.push((
+            method,
+            regex,
+            0,
+            handler.into_handler(),
+        ));
         self
     }
 
-    pub fn add_with_priority<H>(mut self, method: Method, regex: &'a str, priority: usize, handler: H) -> Self where
-        H: IntoHandler + 'static {
-        self.path_handler_parts.push((method, regex, priority, handler.into_handler()));
+    pub fn add_with_priority<H>(
+        mut self,
+        method: Method,
+        regex: &'a str,
+        priority: usize,
+        handler: H,
+    ) -> Self
+    where
+        H: IntoHandler + 'static,
+    {
+        self.path_handler_parts.push((
+            method,
+            regex,
+            priority,
+            handler.into_handler(),
+        ));
         self
     }
 
     pub fn finish(self) -> ::err::Result<Router> {
-        
+
         let not_found = self.not_found.ok_or(::err::ErrorKind::NotFoundNotSet)?;
 
         let mut router = Router::base(not_found);
@@ -428,8 +462,10 @@ impl<'a> RouterBuilder<'a> {
         let mut path_handlers_map = ::std::collections::HashMap::new();
 
         for (method, path, priority, handler) in self.path_handler_parts {
-            let &mut (ref mut paths, ref mut priorities, ref mut handlers) = 
-                path_handlers_map.entry(method).or_insert_with(|| (Vec::new(), Vec::new(), Vec::new() ) );
+            let &mut (ref mut paths, ref mut priorities, ref mut handlers) =
+                path_handlers_map.entry(method).or_insert_with(|| {
+                    (Vec::new(), Vec::new(), Vec::new())
+                });
             paths.push(path);
             priorities.push(priority);
             handlers.push(handler);
@@ -442,12 +478,16 @@ impl<'a> RouterBuilder<'a> {
                 regexes.push(Arc::new(Regex::new(path)?));
             }
 
-            let path_handlers = PathHandlers { regex_set, regexes, priorities, handlers };
+            let path_handlers = PathHandlers {
+                regex_set,
+                regexes,
+                priorities,
+                handlers,
+            };
 
             *router.handlers.get_mut(&method)? = Some(path_handlers);
         }
 
         Ok(router)
     }
-
 }

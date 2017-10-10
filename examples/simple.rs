@@ -114,8 +114,7 @@ fn other(_: Request) -> err::Result<Response> {
 }
 
 fn json(_: Request) -> err::Result<Response> {
-    Ok(Response::new()
-        .with_sized_body("[1,2,3]"))
+    Ok(Response::new().with_sized_body("[1,2,3]"))
 }
 
 
@@ -175,7 +174,7 @@ impl Service for Server {
     type Error = <Router as Service>::Error;
     type Future = <Router as Service>::Future;
 
-    fn call(&self, req: Self::Request) -> Self::Future {        
+    fn call(&self, req: Self::Request) -> Self::Future {
         println!("{:?}", &req.path());
         self.0.call(req)
     }

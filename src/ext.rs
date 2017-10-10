@@ -59,10 +59,9 @@ impl RequestExtensions for super::Request {
     }
 
     fn back(&self) -> Option<&str> {
-        self.headers()
-            .get::<header::Referer>()
-            .as_ref()
-            .map(|x| &***x)
+        self.headers().get::<header::Referer>().as_ref().map(
+            |x| &***x,
+        )
     }
 }
 
@@ -108,8 +107,12 @@ pub trait ServiceExtensions {
     ) -> ::err::Result<()>;
 }
 
-impl<T: Service<Request=super::HyperRequest, Response=Response, Error=::hyper::Error> + Send + Sync + 'static> ServiceExtensions for T {
-    
+impl<
+    T: Service<Request = super::HyperRequest, Response = Response, Error = ::hyper::Error>
+        + Send
+        + Sync
+        + 'static,
+> ServiceExtensions for T {
     fn quick_serve<F: Fn() -> Core + 'static + Send + Sync>(
         self,
         num_threads: usize,
@@ -121,7 +124,16 @@ impl<T: Service<Request=super::HyperRequest, Response=Response, Error=::hyper::E
         use hyper::server::Http;
         use self::net2::unix::UnixTcpBuilderExt;
 
-        fn inner<U: Service<Request=super::HyperRequest, Response=Response, Error=::hyper::Error> + Send + Sync + 'static>(
+        fn inner<
+            U: Service<
+                Request = super::HyperRequest,
+                Response = Response,
+                Error = ::hyper::Error,
+            >
+                + Send
+                + Sync
+                + 'static,
+        >(
             addr: &SocketAddr,
             protocol: Arc<Http>,
             service: Arc<U>,
@@ -133,8 +145,7 @@ impl<T: Service<Request=super::HyperRequest, Response=Response, Error=::hyper::E
                 .reuse_port(true)?
                 .bind(addr)?
                 .listen(128)?;
-            let listener =
-                self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)?;
+            let listener = self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)?;
             core.run(listener.incoming().for_each(|(socket, addr)| {
                 protocol.bind_connection(&hdl, socket, addr, service.clone());
                 Ok(())
