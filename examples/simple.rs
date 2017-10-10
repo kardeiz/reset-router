@@ -13,7 +13,7 @@ extern crate tokio_core;
 extern crate net2;
 extern crate serde_json;
 
-use reset_router::{Request, Response, Router};
+use reset_router::{Request, Response, Router, Handler, Next};
 
 use futures::Stream;
 use futures::{BoxFuture, Future};
@@ -113,7 +113,7 @@ fn other(_: Request) -> err::Result<Response> {
 
 fn json(_: Request) -> err::Result<Response> {
     Ok(Response::new()
-        .with_json(&vec!["a", "bunch", "of", "strings"])?)
+        .with_sized_body("[1,2,3]"))
 }
 
 
@@ -165,6 +165,11 @@ fn assets(req: Request) -> BoxedResponse {
 
 }
 
+fn filter(req: Request, handler: ::std::sync::Arc<Box<Handler>>) -> Next {
+    println!("{:?}", req.path());
+    Next::Request(req)
+}
+
 
 
 fn main() {
@@ -175,6 +180,7 @@ fn main() {
         .add(Method::Get, r"\A/json/*\z", json)
         .add(Method::Get, r"\A/other\z", other)
         .add(Method::Post, r"\A/post_body\z", post_body)
+        .add_filter(Method::Get, r"/js.*", filter)
         .add_not_found(not_found)
         .finish()
         .unwrap();
