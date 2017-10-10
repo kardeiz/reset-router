@@ -375,7 +375,7 @@ impl Router {
 
     fn handle(&self, req: HyperRequest) -> BoxFuture<Response, ::hyper::Error> {
 
-        if let Some(ref path_handlers) =
+        if let Some(path_handlers) =
             self.handlers.get(req.method()).ok().and_then(
                 |x| x.as_ref(),
             )
@@ -474,7 +474,7 @@ impl<'a> RouterBuilder<'a> {
         for (method, (paths, priorities, handlers)) in path_handlers_map {
             let regex_set = RegexSet::new(paths.iter())?;
             let mut regexes = Vec::new();
-            for path in paths.iter() {
+            for path in &paths {
                 regexes.push(Arc::new(Regex::new(path)?));
             }
 
