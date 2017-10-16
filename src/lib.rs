@@ -31,21 +31,21 @@
 //!
 //!
 
-extern crate futures;
-extern crate hyper;
+// extern crate futures;
 extern crate regex;
+// extern crate hyper;
 
 #[macro_use]
 extern crate error_chain;
 
-use hyper::Method;
-use hyper::server::Request as HyperRequest;
-use hyper::server::Service;
+// use hyper::Method;
+// use hyper::server::Request as HyperRequest;
+// use hyper::server::Service;
 
-pub use hyper::server::Response;
+// pub use hyper::server::Response;
 
 use regex::{Captures, Regex, RegexSet};
-use futures::{Future, IntoFuture};
+// use futures::{Future, IntoFuture};
 
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
