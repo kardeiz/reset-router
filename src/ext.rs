@@ -65,11 +65,18 @@ impl RequestExtensions for super::Request {
     }
 }
 
-pub trait ResponseExtensions {
+pub trait ResponseExtensions: Sized {
     fn set_cookies(&mut self, jar: &CookieJar);
-    fn with_cookies(self, jar: &CookieJar) -> Response;
+    fn with_cookies(mut self, jar: &CookieJar) -> Self {
+        self.set_cookies(jar);
+        self
+    }
+
     fn set_sized_body<T: CommonLen + Into<::hyper::Body>>(&mut self, t: T);
-    fn with_sized_body<T: CommonLen + Into<::hyper::Body>>(self, t: T) -> Response;
+    fn with_sized_body<T: CommonLen + Into<::hyper::Body>>(mut self, t: T) -> Self {
+        self.set_sized_body(t);
+        self
+    }
 }
 
 
@@ -81,21 +88,12 @@ impl ResponseExtensions for Response {
         }
     }
 
-    fn with_cookies(mut self, jar: &CookieJar) -> Response {
-        self.set_cookies(jar);
-        self
-    }
-
     fn set_sized_body<T: CommonLen + Into<::hyper::Body>>(&mut self, t: T) {
         use hyper::header::ContentLength;
         self.headers_mut().set(ContentLength(t.common_len() as u64));
         self.set_body(t);
     }
 
-    fn with_sized_body<T: CommonLen + Into<::hyper::Body>>(mut self, t: T) -> Response {
-        self.set_sized_body(t);
-        self
-    }
 }
 
 pub trait ServiceExtensions {
