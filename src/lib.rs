@@ -53,7 +53,6 @@ use std::sync::Arc;
 pub mod err {
 
     //! Error handling with `error-chain`
-
     error_chain! {
         errors {
             NotFound {
@@ -87,9 +86,6 @@ pub mod err {
 #[cfg(feature = "hyper")]
 pub mod hyper;
 
-#[cfg(feature = "simple-server")]
-pub mod simple_server;
-
 pub trait RequestLike {
     fn path(&self) -> &str;
     fn query(&self) -> Option<&str>;
@@ -119,9 +115,9 @@ impl<R: RequestLike> Context<R> {
     /// Captures (if any) from the matched path regex
 
     pub fn captures(&self) -> Option<Captures> {
-        self.regex_match.as_ref().and_then(
-            |r| r.captures(RequestLike::path(&self.request)),
-        )
+        self.regex_match.as_ref().and_then(|r| {
+            r.captures(RequestLike::path(&self.request))
+        })
     }
 
     /// Parsed capture segments
@@ -141,9 +137,11 @@ impl<R: RequestLike> Context<R> {
     }
 
     pub fn from_request_and_regex(request: R, regex_match: Option<Arc<Regex>>) -> Self {
-        Context { request, regex_match }
+        Context {
+            request,
+            regex_match,
+        }
     }
-
 }
 
 pub trait CaptureParsing<R>: Sized {
@@ -152,7 +150,8 @@ pub trait CaptureParsing<R>: Sized {
 
 impl<R, T> CaptureParsing<R> for (T,)
 where
-    R: RequestLike, T: FromStr
+    R: RequestLike,
+    T: FromStr,
 {
     fn parse_captures(context: &Context<R>) -> err::Result<Self> {
         let caps = context.captures().ok_or(err::ErrorKind::CapturesError)?;
@@ -210,7 +209,9 @@ where
 }
 
 pub trait IntoBoxedHandler<T, S> {
-    fn into_boxed_handler(self) -> Box<Handler<T, S>> where Self: Sized + 'static;
+    fn into_boxed_handler(self) -> Box<Handler<T, S>>
+    where
+        Self: Sized + 'static;
 }
 
 pub trait Handler<T, S>: Send + Sync {
@@ -228,7 +229,6 @@ pub struct MethodMap<T> {
 }
 
 impl<T> MethodMap<T> {
-
     fn get(&self, method: &Method) -> err::Result<&T> {
         match *method {
             Method::GET => Ok(&self.get),
@@ -268,26 +268,30 @@ pub struct Router<T, S> {
 }
 
 impl<T, S> Router<T, S> {
-    
     pub fn build<'a>() -> RouterBuilder<'a, T, S> {
         RouterBuilder::new()
     }
 
     fn new() -> Self {
-        Router {
-            handlers: MethodMap::default(),
-        }
+        Router { handlers: MethodMap::default() }
     }
 
-    fn find_handler_and_context<R: RequestLike>(&self, request: R) -> err::Result<(&Box<Handler<T, S>>, Context<R>)> {
+    fn find_handler_and_context<R: RequestLike>(
+        &self,
+        request: R,
+    ) -> err::Result<(&Box<Handler<T, S>>, Context<R>)> {
         if let Some(path_handlers) =
-            self.handlers.get(&RequestLike::method(&request)).ok().and_then(|x| x.as_ref() ) {
+            self.handlers
+                .get(&RequestLike::method(&request))
+                .ok()
+                .and_then(|x| x.as_ref())
+        {
             let priorities = &path_handlers.priorities;
-            if let Some(i) = path_handlers.regex_set.matches(RequestLike::path(&request)).iter().min_by(
-                |x, y| {
-                    priorities[*x].cmp(&priorities[*y])
-                },
-            )
+            if let Some(i) = path_handlers
+                .regex_set
+                .matches(RequestLike::path(&request))
+                .iter()
+                .min_by(|x, y| priorities[*x].cmp(&priorities[*y]))
             {
 
                 let handler = &path_handlers.handlers[i];
@@ -301,7 +305,6 @@ impl<T, S> Router<T, S> {
 
         Err(err::ErrorKind::NotFound.into())
     }
-
 }
 
 /// Builder for a [`Router`](/reset-router/*/reset_router/struct.Router.html)
@@ -315,11 +318,8 @@ pub struct RouterBuilder<'a, T, S> {
 }
 
 impl<'a, T, S> RouterBuilder<'a, T, S> {
-
     pub fn new() -> Self {
-        RouterBuilder {
-            path_handler_parts: Vec::new()
-        }
+        RouterBuilder { path_handler_parts: Vec::new() }
     }
 
     pub fn add<H>(mut self, method: Method, regex: &'a str, handler: H) -> Self

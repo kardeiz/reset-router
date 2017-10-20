@@ -12,7 +12,7 @@ use self::futures::{Future, IntoFuture};
 use super::{err, Handler, IntoBoxedHandler, RequestLike};
 
 pub type HyperContext = super::Context<HyperRequest>;
-pub type HyperRouter  = super::Router<HyperContext, BoxFuture<HyperResponse, HyperError>>;
+pub type HyperRouter = super::Router<HyperContext, BoxFuture<HyperResponse, HyperError>>;
 
 pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
 
@@ -30,10 +30,14 @@ where
 }
 
 impl RequestLike for HyperRequest {
-    fn path(&self) -> &str { self.path() }
-    fn query(&self) -> Option<&str> { self.query() }
-    fn method(&self) -> &::http::Method { 
-        
+    fn path(&self) -> &str {
+        self.path()
+    }
+    fn query(&self) -> Option<&str> {
+        self.query()
+    }
+    fn method(&self) -> &::http::Method {
+
         pub const GET: &'static ::http::Method = &::http::Method::GET;
         pub const POST: &'static ::http::Method = &::http::Method::POST;
         pub const PUT: &'static ::http::Method = &::http::Method::PUT;
@@ -48,32 +52,39 @@ impl RequestLike for HyperRequest {
             &HyperMethod::Patch => PATCH,
             &HyperMethod::Head => HEAD,
             &HyperMethod::Delete => DELETE,
-            _ => panic!("Unsupported method")
+            _ => panic!("Unsupported method"),
         }
     }
 }
 
 impl HyperContext {
-    
     #[deprecated]
     pub fn into_inner(self) -> HyperRequest {
         self.into_request()
     }
 
     #[deprecated]
-    pub fn extract_captures<T: super::CaptureParsing<HyperRequest>>(&self) -> super::err::Result<T> {
+    pub fn extract_captures<T: super::CaptureParsing<HyperRequest>>(
+        &self,
+    ) -> super::err::Result<T> {
         Ok(T::parse_captures(self)?)
     }
 
     pub fn split_body(self) -> (Self, self::hyper::Body) {
-        let super::Context { request, regex_match } = self;
+        let super::Context {
+            request,
+            regex_match,
+        } = self;
         let (method, uri, version, headers, body) = request.deconstruct();
 
         let mut request = HyperRequest::new(method, uri);
         *request.headers_mut() = headers;
         request.set_version(version);
 
-        let new = super::Context { request, regex_match };
+        let new = super::Context {
+            request,
+            regex_match,
+        };
         (new, body)
     }
 }
@@ -112,7 +123,10 @@ where
 }
 
 impl HyperRouter {
-    pub fn handle(&self, request: HyperRequest) -> err::Result<BoxFuture<HyperResponse, HyperError>> {
+    pub fn handle(
+        &self,
+        request: HyperRequest,
+    ) -> err::Result<BoxFuture<HyperResponse, HyperError>> {
         let (handler, context) = self.find_handler_and_context(request)?;
         Ok(handler.handle(context))
     }
@@ -130,11 +144,15 @@ impl HyperService for HyperRouter {
         use self::hyper::header::{ContentLength, ContentType};
         self.handle(req).unwrap_or_else(|_| {
             let msg = "NOT FOUND";
-            Box::new(Ok(HyperResponse::new()
-                .with_status(StatusCode::NotFound)
-                .with_header(ContentLength(msg.len() as u64))
-                .with_header(ContentType::plaintext())
-                .with_body(msg)).into_future())
+            Box::new(
+                Ok(
+                    HyperResponse::new()
+                        .with_status(StatusCode::NotFound)
+                        .with_header(ContentLength(msg.len() as u64))
+                        .with_header(ContentType::plaintext())
+                        .with_body(msg),
+                ).into_future(),
+            )
         })
     }
 }
@@ -205,7 +223,9 @@ pub mod ext {
 
         fn back(&self) -> Option<&str> {
             self.headers().get::<hyper_header::Referer>().as_ref().map(
-                |x| &***x,
+                |x| {
+                    &***x
+                },
             )
         }
     }
@@ -234,10 +254,11 @@ pub mod ext {
         }
 
         fn set_sized_body<T: CommonLen + Into<HyperBody>>(&mut self, t: T) {
-            self.headers_mut().set(hyper_header::ContentLength(t.common_len() as u64));
+            self.headers_mut().set(hyper_header::ContentLength(
+                t.common_len() as u64,
+            ));
             self.set_body(t);
         }
-
     }
 
     pub trait ServiceExtensions {
@@ -249,12 +270,17 @@ pub mod ext {
         ) -> ::err::Result<()>;
     }
 
-    impl<
-        T: HyperService<Request = HyperRequest, Response = HyperResponse, Error = HyperError>
+    impl<T> ServiceExtensions for T
+    where
+        T: HyperService<
+            Request = HyperRequest,
+            Response = HyperResponse,
+            Error = HyperError,
+        >
             + Send
             + Sync
             + 'static,
-    > ServiceExtensions for T {
+    {
         fn quick_serve<F: Fn() -> Core + 'static + Send + Sync>(
             self,
             num_threads: usize,
@@ -286,7 +312,8 @@ pub mod ext {
                     .reuse_port(true)?
                     .bind(addr)?
                     .listen(128)?;
-                let listener = self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)?;
+                let listener =
+                    self::tokio_core::net::TcpListener::from_listener(listener, addr, &hdl)?;
                 core.run(listener.incoming().for_each(|(socket, addr)| {
                     protocol.bind_connection(&hdl, socket, addr, service.clone());
                     Ok(())

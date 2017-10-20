@@ -6,6 +6,9 @@ extern crate num_cpus;
 #[macro_use]
 extern crate error_chain;
 
+#[macro_use]
+extern crate log;
+
 extern crate futures_fs;
 extern crate conduit_mime_types;
 
@@ -16,6 +19,7 @@ extern crate http;
 
 use reset_router::{Context, Router};
 use reset_router::hyper::HyperContext;
+use reset_router::hyper::ext::*;
 
 use futures::Stream;
 use futures::{BoxFuture, Future};
@@ -30,11 +34,13 @@ use http::Method;
 
 use hyper::header::{ContentLength, ContentType};
 
+
+
 use std::sync::Arc;
 
 fn other(ctx: HyperContext) -> Result<Response, Response> {
-    println!("{:?}", &ctx.path());
-    let msg = "OTHER";
+    info!("Request received. {} {}", ctx.method(), ctx.path());
+    let msg = "Hello Rust!";
     let response = Response::new()
         .with_status(::hyper::StatusCode::Ok)
         .with_header(ContentLength(msg.len() as u64))
@@ -43,19 +49,36 @@ fn other(ctx: HyperContext) -> Result<Response, Response> {
     Ok(response)
 }
 
+struct Echo;
+
+impl hyper::server::Service for Echo {
+    type Request = Request;
+    type Response = Response;
+    type Error = hyper::Error;
+    type Future = futures::future::FutureResult<Response, hyper::Error>;
+
+    fn call(&self, req: Request) -> Self::Future {
+        info!("Request received. {} {}", req.method(), req.path());
+        let msg = "Hello Rust!";
+        let response = Response::new()
+            .with_status(::hyper::StatusCode::Ok)
+            .with_header(ContentLength(msg.len() as u64))
+            .with_header(ContentType::plaintext())
+            .with_body(msg);
+        futures::future::ok(response)
+    }
+
+}
+
 fn main() {
-    let addr = "0.0.0.0:3000".parse().unwrap();    
+    let addr = "127.0.0.1:7878".parse().unwrap();
 
-    let router = Router::build()
-        .add(Method::GET, r"\A/other\z", other)
-        .finish()
-        .unwrap();
+    // let router = Router::build()
+    //     .add(Method::GET, r"\A/other\z", other)
+    //     .finish()
+    //     .unwrap();
 
-    let wrapped = Arc::new(router);
-
-    let server = Http::new().bind(&addr, move || Ok(wrapped.clone())).unwrap();
-
-    server.run().unwrap();
+    Echo.quick_serve(4, addr, || ::tokio_core::reactor::Core::new().unwrap()).unwrap();
 }
 
 
