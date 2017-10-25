@@ -128,8 +128,8 @@ impl<R: RequestLike> Context<R> {
     /// let (id, slug): (i32, String) = req.extract_captures().unwrap();
     /// ```
 
-    pub fn parsed_captures<C: CaptureParsing<R>>(&self) -> Result<C, err::Error> {
-        Ok(C::parse_captures(self)?)
+    pub fn extract_captures<C: CaptureExtracting<R>>(&self) -> Result<C, err::Error> {
+        Ok(C::extract_captures(self)?)
     }
 
     pub fn into_request(self) -> R {
@@ -144,16 +144,16 @@ impl<R: RequestLike> Context<R> {
     }
 }
 
-pub trait CaptureParsing<R>: Sized {
-    fn parse_captures(req: &Context<R>) -> err::Result<Self>;
+pub trait CaptureExtracting<R>: Sized {
+    fn extract_captures(req: &Context<R>) -> err::Result<Self>;
 }
 
-impl<R, T> CaptureParsing<R> for (T,)
+impl<R, T> CaptureExtracting<R> for (T,)
 where
     R: RequestLike,
     T: FromStr,
 {
-    fn parse_captures(context: &Context<R>) -> err::Result<Self> {
+    fn extract_captures(context: &Context<R>) -> err::Result<Self> {
         let caps = context.captures().ok_or(err::ErrorKind::CapturesError)?;
         let out_1 = caps.get(1)
             .map(|x| x.as_str())
@@ -163,13 +163,13 @@ where
     }
 }
 
-impl<R, T1, T2> CaptureParsing<R> for (T1, T2)
+impl<R, T1, T2> CaptureExtracting<R> for (T1, T2)
 where
     R: RequestLike,
     T1: FromStr,
     T2: FromStr,
 {
-    fn parse_captures(context: &Context<R>) -> err::Result<Self> {
+    fn extract_captures(context: &Context<R>) -> err::Result<Self> {
         let caps = context.captures().ok_or(err::ErrorKind::CapturesError)?;
         let out_1 = caps.get(1)
             .map(|x| x.as_str())
@@ -183,14 +183,14 @@ where
     }
 }
 
-impl<R, T1, T2, T3> CaptureParsing<R> for (T1, T2, T3)
+impl<R, T1, T2, T3> CaptureExtracting<R> for (T1, T2, T3)
 where
     R: RequestLike,
     T1: FromStr,
     T2: FromStr,
     T3: FromStr,
 {
-    fn parse_captures(context: &Context<R>) -> err::Result<Self> {
+    fn extract_captures(context: &Context<R>) -> err::Result<Self> {
         let caps = context.captures().ok_or(err::ErrorKind::CapturesError)?;
         let out_1 = caps.get(1)
             .map(|x| x.as_str())

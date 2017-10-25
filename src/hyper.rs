@@ -63,13 +63,6 @@ impl HyperContext {
         self.into_request()
     }
 
-    #[deprecated]
-    pub fn extract_captures<T: super::CaptureParsing<HyperRequest>>(
-        &self,
-    ) -> super::err::Result<T> {
-        Ok(T::parse_captures(self)?)
-    }
-
     pub fn split_body(self) -> (Self, self::hyper::Body) {
         let super::Context {
             request,
