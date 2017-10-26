@@ -214,6 +214,12 @@ pub trait IntoBoxedHandler<T, S> {
         Self: Sized + 'static;
 }
 
+impl<T, S> IntoBoxedHandler<T, S> for Box<Handler<T, S>> {
+    fn into_boxed_handler(self) -> Box<Handler<T, S>> {
+        self
+    }
+}
+
 pub trait Handler<T, S>: Send + Sync {
     fn handle(&self, T) -> S;
 }
@@ -388,5 +394,47 @@ impl<'a, T, S> RouterBuilder<'a, T, S> {
         }
 
         Ok(router)
+    }
+
+}
+
+macro_rules! __build__ {
+    ($([$add_method:ident, $add_method_with_priority:ident, $method:path]),+) => {
+
+        $(
+
+            #[deprecated]
+            pub fn $add_method<H>(self, regex: &'a str, handler: H) -> Self
+            where
+                H: IntoBoxedHandler<T, S> + 'static
+            {
+                self.add($method, regex, handler)
+            }
+
+            #[deprecated]
+            pub fn $add_method_with_priority<H>(
+                self,
+                regex: &'a str,
+                priority: usize,
+                handler: H
+            ) -> Self
+            where
+                H: IntoBoxedHandler<T, S> + 'static
+            {
+                self.add_with_priority($method, regex, priority, handler)
+            }
+        )*
+
+    }
+}
+
+impl<'a, T, S> RouterBuilder<'a, T, S> {
+    __build__! {
+        [add_get, add_get_with_priority, Method::GET],
+        [add_post, add_post_with_priority, Method::POST],
+        [add_put, add_put_with_priority, Method::PUT],
+        [add_patch, add_patch_with_priority, Method::PATCH],
+        [add_head, add_head_with_priority, Method::HEAD],
+        [add_delete, add_delete_with_priority, Method::DELETE]
     }
 }

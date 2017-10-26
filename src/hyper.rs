@@ -115,16 +115,12 @@ where
     }
 }
 
-impl HyperRouter {
-    pub fn handle(
-        &self,
-        request: HyperRequest,
-    ) -> err::Result<BoxFuture<HyperResponse, HyperError>> {
+impl Handler<HyperRequest, err::Result<BoxFuture<HyperResponse, HyperError>>> for HyperRouter {
+    fn handle(&self, request: HyperRequest) -> err::Result<BoxFuture<HyperResponse, HyperError>> {
         let (handler, context) = self.find_handler_and_context(request)?;
         Ok(handler.handle(context))
     }
 }
-
 
 impl HyperService for HyperRouter {
     type Request = HyperRequest;
