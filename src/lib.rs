@@ -270,17 +270,19 @@ pub struct PathHandlers<T, S> {
 /// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
 
 pub struct Router<T, S> {
+    not_found: Option<Box<Handler<T, S>>>,
     handlers: MethodMap<Option<PathHandlers<T, S>>>,
 }
 
 impl<T, S> Router<T, S> {
+    
     pub fn build<'a>() -> RouterBuilder<'a, T, S> {
         RouterBuilder::new()
     }
 
-    fn new() -> Self {
-        Router { handlers: MethodMap::default() }
-    }
+    // fn new() -> Self {
+    //     Router { handlers: MethodMap::default() }
+    // }
 
     fn find_handler_and_context<R: RequestLike>(
         &self,
@@ -309,7 +311,11 @@ impl<T, S> Router<T, S> {
             }
         }
 
-        Err(err::ErrorKind::NotFound.into())
+        match self.not_found.as_ref() {
+            Some(handler) => Ok((handler, Context::from_request_and_regex(request, None))),
+            None => Err(err::ErrorKind::NotFound.into())
+        }
+        
     }
 }
 
@@ -320,12 +326,22 @@ impl<T, S> Router<T, S> {
 /// Default priority is 0. Lowest priority (closer to 0) wins.
 
 pub struct RouterBuilder<'a, T, S> {
+    not_found: Option<Box<Handler<T, S>>>,
     path_handler_parts: Vec<(Method, &'a str, usize, Box<Handler<T, S>>)>,
 }
 
 impl<'a, T, S> RouterBuilder<'a, T, S> {
+    
     pub fn new() -> Self {
-        RouterBuilder { path_handler_parts: Vec::new() }
+        RouterBuilder { not_found: None, path_handler_parts: Vec::new() }
+    }
+
+    pub fn add_not_found<H>(mut self, handler: H) -> Self
+    where
+        H: IntoBoxedHandler<T, S> + 'static,
+    {
+        self.not_found = Some(handler.into_boxed_handler());
+        self
     }
 
     pub fn add<H>(mut self, method: Method, regex: &'a str, handler: H) -> Self
@@ -362,8 +378,6 @@ impl<'a, T, S> RouterBuilder<'a, T, S> {
 
     pub fn finish(self) -> err::Result<Router<T, S>> {
 
-        let mut router = Router::new();
-
         let mut path_handlers_map = ::std::collections::HashMap::new();
 
         for (method, path, priority, handler) in self.path_handler_parts {
@@ -375,6 +389,11 @@ impl<'a, T, S> RouterBuilder<'a, T, S> {
             priorities.push(priority);
             handlers.push(handler);
         }
+
+        let mut router = Router {
+            not_found: self.not_found,
+            handlers: MethodMap::default()
+        };
 
         for (method, (paths, priorities, handlers)) in path_handlers_map {
             let regex_set = RegexSet::new(paths.iter())?;
