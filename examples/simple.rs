@@ -13,9 +13,8 @@ extern crate conduit_mime_types;
 
 extern crate tokio_core;
 extern crate net2;
-extern crate serde_json;
 
-use reset_router::hyper::{HyperContext as Context, HyperRouter as Router, IntoResponse};
+use reset_router::hyper::{Context, Router};
 
 use futures::Stream;
 use futures::Future;
@@ -28,14 +27,12 @@ use hyper::Response;
 
 pub mod err {
 
-
     error_chain! {
         errors { }
 
         foreign_links {
             Io(::std::io::Error);
             Hyper(::hyper::Error);
-            SerdeJson(::serde_json::Error);
         }
     }
 
@@ -51,27 +48,6 @@ pub mod err {
         }
     }
 
-}
-
-mod core_handling {
-    use tokio_core::reactor::{Core, Handle};
-    use std::cell::RefCell;
-
-    pub struct CoreHandler(RefCell<Option<Core>>, Handle);
-
-    thread_local!(static CORE_HANDLER: CoreHandler = {
-        let core = Core::new().unwrap();
-        let handle = core.handle();
-        CoreHandler(RefCell::new(Some(core)), handle)
-    });
-
-    pub fn local_core_take() -> Option<Core> {
-        CORE_HANDLER.with(|o| o.0.borrow_mut().take())
-    }
-
-    pub fn with_local_handle<T, F: FnOnce(&Handle) -> T>(cls: F) -> T {
-        CORE_HANDLER.with(|o| cls(&o.1))
-    }
 }
 
 mod utils {
@@ -95,13 +71,13 @@ type BoxedResponse = BoxFuture<hyper::Response, err::Error>;
 
 fn not_found(_: Context) -> BoxedResponse {
     let msg = "NOT FOUND";
-    ::futures::future::ok(
+    Box::new(::futures::future::ok(
         Response::new()
             .with_status(::hyper::StatusCode::NotFound)
             .with_header(ContentLength(msg.len() as u64))
             .with_header(ContentType::plaintext())
             .with_body(msg),
-    ).boxed()
+    ))
 }
 
 fn other(_: Context) -> err::Result<Response> {
@@ -114,22 +90,17 @@ fn other(_: Context) -> err::Result<Response> {
     Ok(response)
 }
 
-
 fn post_body(ctx: Context) -> BoxedResponse {
 
     let body = ctx.into_request().body();
 
-    body.concat2()
-        .from_err()
-        .map(|bytes| {
-            Response::new()
-                .with_status(::hyper::StatusCode::Ok)
-                .with_header(ContentLength(bytes.len() as u64))
-                .with_header(ContentType::plaintext())
-                .with_body(bytes)
-        })
-        .boxed()
-
+    Box::new(body.concat2().from_err().map(|bytes| {
+        Response::new()
+            .with_status(::hyper::StatusCode::Ok)
+            .with_header(ContentLength(bytes.len() as u64))
+            .with_header(ContentType::plaintext())
+            .with_body(bytes)
+    }))
 }
 
 fn assets(ctx: Context) -> BoxedResponse {
@@ -148,18 +119,13 @@ fn assets(ctx: Context) -> BoxedResponse {
 
     let mime = utils::mime_for(&path);
 
-    FS_POOL
-        .read(path)
-        .concat2()
-        .from_err()
-        .map(|bytes| {
-            Response::new()
-                .with_status(::hyper::StatusCode::Ok)
-                .with_header(ContentLength(bytes.len() as u64))
-                .with_header(ContentType(mime))
-                .with_body(bytes)
-        })
-        .boxed()
+    Box::new(FS_POOL.read(path).concat2().from_err().map(|bytes| {
+        Response::new()
+            .with_status(::hyper::StatusCode::Ok)
+            .with_header(ContentLength(bytes.len() as u64))
+            .with_header(ContentType(mime))
+            .with_body(bytes)
+    }))
 
 }
 
@@ -175,10 +141,13 @@ fn main() {
         .add_get(r"\A/assets/(.+)\z", assets)
         .add_get(r"\A/other\z", other)
         .add_post(r"\A/post_body\z", post_body)
+        .add_not_found(not_found)
         .finish()
         .unwrap();
 
-    router.quick_serve(num_cpus::get(), addr, || {
-        core_handling::local_core_take().unwrap()
-    });
+    router
+        .quick_serve(num_cpus::get(), addr, || {
+            ::tokio_core::reactor::Core::new().unwrap()
+        })
+        .unwrap();
 }

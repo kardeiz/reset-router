@@ -1,9 +1,10 @@
-//! A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Hyper v0.11.x.
+//! A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Rust web servers
+//! (currently only supports Hyper 0.11.6).
 //!
-//! Similar to and inspired by [reroute](https://github.com/gsquire/reroute), but for async Hyper and potentially
+//! Similar to and inspired by [reroute](https://github.com/gsquire/reroute), but  potentially
 //! faster (no unnecessary string allocations, no hashmaps, and method-first-matching).
 //!
-//! Enables request handling for functions that look like `Fn(Request) -> RESPONSE`
+//! When used with Hyper, enables request handling for functions that look like `Fn(Request) -> RESPONSE`
 //! where `Request` is a thin wrapper around `hyper::server::Request` and
 //!
 //! ```rust,ignore
@@ -16,7 +17,7 @@
 //! This means you can return something as simple as `Ok(Response::new())`. You don't have to worry about futures
 //! unless you need to read the request body or interact with other future-aware things.
 //!
-//! Use like:
+//! When used with Hyper, usage looks like:
 //!
 //! ```rust,ignore
 //! let router = Router::build()
@@ -27,13 +28,9 @@
 //! router.quick_serve(8, "0.0.0.0:3000".parse().unwrap(), || Core::new().unwrap() );
 //! ```
 //!
-//! See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for examples.
-//!
-//!
+//! See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for an example of use with Hyper.
 
-// extern crate futures;
 extern crate regex;
-
 extern crate http;
 
 // extern crate hyper;
@@ -113,7 +110,6 @@ impl<R> DerefMut for Context<R> {
 
 impl<R: RequestLike> Context<R> {
     /// Captures (if any) from the matched path regex
-
     pub fn captures(&self) -> Option<Captures> {
         self.regex_match.as_ref().and_then(|r| {
             r.captures(RequestLike::path(&self.request))
@@ -127,13 +123,18 @@ impl<R: RequestLike> Context<R> {
     /// ```rust,ignore
     /// let (id, slug): (i32, String) = req.extract_captures().unwrap();
     /// ```
-
     pub fn extract_captures<C: CaptureExtracting<R>>(&self) -> Result<C, err::Error> {
         Ok(C::extract_captures(self)?)
     }
 
+    /// Consume and return the inner `RequestLike` object
     pub fn into_request(self) -> R {
         self.request
+    }
+
+    #[deprecated]
+    pub fn into_inner(self) -> R {
+        self.into_request()
     }
 
     pub fn from_request_and_regex(request: R, regex_match: Option<Arc<Regex>>) -> Self {
@@ -208,6 +209,10 @@ where
     }
 }
 
+/// Provides a way to convert some item into a boxed handler.
+///
+/// This is useful to converge e.g. disparate functions into a single signature.
+
 pub trait IntoBoxedHandler<T, S> {
     fn into_boxed_handler(self) -> Box<Handler<T, S>>
     where
@@ -220,6 +225,7 @@ impl<T, S> IntoBoxedHandler<T, S> for Box<Handler<T, S>> {
     }
 }
 
+/// The handler. For example, takes a `Request` and returns a `Response`.
 pub trait Handler<T, S>: Send + Sync {
     fn handle(&self, T) -> S;
 }
@@ -267,22 +273,16 @@ pub struct PathHandlers<T, S> {
     handlers: Vec<Box<Handler<T, S>>>,
 }
 
-/// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for how to build a `Router`.
-
+/// The "finished" `Router`. See [`RouterBuilder`](/reset-router/*/reset_router/struct.RouterBuilder.html) for building a `Router`.
 pub struct Router<T, S> {
     not_found: Option<Box<Handler<T, S>>>,
     handlers: MethodMap<Option<PathHandlers<T, S>>>,
 }
 
 impl<T, S> Router<T, S> {
-    
     pub fn build<'a>() -> RouterBuilder<'a, T, S> {
         RouterBuilder::new()
     }
-
-    // fn new() -> Self {
-    //     Router { handlers: MethodMap::default() }
-    // }
 
     fn find_handler_and_context<R: RequestLike>(
         &self,
@@ -311,11 +311,12 @@ impl<T, S> Router<T, S> {
             }
         }
 
-        match self.not_found.as_ref() {
-            Some(handler) => Ok((handler, Context::from_request_and_regex(request, None))),
-            None => Err(err::ErrorKind::NotFound.into())
+        if let Some(handler) = self.not_found.as_ref() {
+            return Ok((handler, Context::from_request_and_regex(request, None)));
         }
-        
+
+        Err(err::ErrorKind::NotFound.into())
+
     }
 }
 
@@ -324,16 +325,17 @@ impl<T, S> Router<T, S> {
 /// Please note that you can assign a priority to a handler with `add_with_priority`.
 ///
 /// Default priority is 0. Lowest priority (closer to 0) wins.
-
 pub struct RouterBuilder<'a, T, S> {
     not_found: Option<Box<Handler<T, S>>>,
     path_handler_parts: Vec<(Method, &'a str, usize, Box<Handler<T, S>>)>,
 }
 
 impl<'a, T, S> RouterBuilder<'a, T, S> {
-    
     pub fn new() -> Self {
-        RouterBuilder { not_found: None, path_handler_parts: Vec::new() }
+        RouterBuilder {
+            not_found: None,
+            path_handler_parts: Vec::new(),
+        }
     }
 
     pub fn add_not_found<H>(mut self, handler: H) -> Self
@@ -392,7 +394,7 @@ impl<'a, T, S> RouterBuilder<'a, T, S> {
 
         let mut router = Router {
             not_found: self.not_found,
-            handlers: MethodMap::default()
+            handlers: MethodMap::default(),
         };
 
         for (method, (paths, priorities, handlers)) in path_handlers_map {
@@ -414,15 +416,12 @@ impl<'a, T, S> RouterBuilder<'a, T, S> {
 
         Ok(router)
     }
-
 }
 
 macro_rules! __build__ {
     ($([$add_method:ident, $add_method_with_priority:ident, $method:path]),+) => {
 
         $(
-
-            #[deprecated]
             pub fn $add_method<H>(self, regex: &'a str, handler: H) -> Self
             where
                 H: IntoBoxedHandler<T, S> + 'static
@@ -430,7 +429,6 @@ macro_rules! __build__ {
                 self.add($method, regex, handler)
             }
 
-            #[deprecated]
             pub fn $add_method_with_priority<H>(
                 self,
                 regex: &'a str,

@@ -11,10 +11,10 @@ use self::futures::{Future, IntoFuture};
 
 use super::{err, Handler, IntoBoxedHandler, RequestLike};
 
-pub type HyperContext = super::Context<HyperRequest>;
-pub type HyperRouter = super::Router<HyperContext, BoxFuture<HyperResponse, HyperError>>;
+pub type Context = super::Context<HyperRequest>;
+pub type Router = super::Router<Context, BoxFuture<HyperResponse, HyperError>>;
 
-pub type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
+type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
 
 pub trait IntoResponse {
     fn into_response(self) -> HyperResponse;
@@ -57,12 +57,8 @@ impl RequestLike for HyperRequest {
     }
 }
 
-impl HyperContext {
-    #[deprecated]
-    pub fn into_inner(self) -> HyperRequest {
-        self.into_request()
-    }
-
+impl Context {
+    /// Splits the `hyper::Body` from the request so that it can be consumed
     pub fn split_body(self) -> (Self, self::hyper::Body) {
         let super::Context {
             request,
@@ -82,29 +78,35 @@ impl HyperContext {
     }
 }
 
-impl<F> Handler<HyperContext, BoxFuture<HyperResponse, HyperError>> for F
+impl<F> Handler<Context, BoxFuture<HyperResponse, HyperError>> for F
 where
-    F: Fn(HyperContext) -> BoxFuture<HyperResponse, HyperError> + Send + Sync,
+    F: Fn(Context)
+       -> BoxFuture<
+        HyperResponse,
+        HyperError,
+    >
+        + Send
+        + Sync,
 {
-    fn handle(&self, context: HyperContext) -> BoxFuture<HyperResponse, HyperError> {
+    fn handle(&self, context: Context) -> BoxFuture<HyperResponse, HyperError> {
         (self)(context)
     }
 }
 
 
-impl<I, S, E, H> IntoBoxedHandler<HyperContext, BoxFuture<HyperResponse, HyperError>> for H
+impl<I, S, E, H> IntoBoxedHandler<Context, BoxFuture<HyperResponse, HyperError>> for H
 where
     I: IntoFuture<Item = S, Error = E>,
     I::Future: 'static,
     S: IntoResponse,
     E: IntoResponse,
-    H: Fn(HyperContext) -> I + Sync + Send,
+    H: Fn(Context) -> I + Sync + Send,
 {
-    fn into_boxed_handler(self) -> Box<Handler<HyperContext, BoxFuture<HyperResponse, HyperError>>>
+    fn into_boxed_handler(self) -> Box<Handler<Context, BoxFuture<HyperResponse, HyperError>>>
     where
         Self: Sized + 'static,
     {
-        Box::new(move |context: HyperContext| -> BoxFuture<HyperResponse, HyperError> {
+        Box::new(move |context: Context| -> BoxFuture<HyperResponse, HyperError> {
             Box::new(
                 (self)(context)
                     .into_future()
@@ -115,14 +117,14 @@ where
     }
 }
 
-impl Handler<HyperRequest, err::Result<BoxFuture<HyperResponse, HyperError>>> for HyperRouter {
+impl Handler<HyperRequest, err::Result<BoxFuture<HyperResponse, HyperError>>> for Router {
     fn handle(&self, request: HyperRequest) -> err::Result<BoxFuture<HyperResponse, HyperError>> {
         let (handler, context) = self.find_handler_and_context(request)?;
         Ok(handler.handle(context))
     }
 }
 
-impl HyperService for HyperRouter {
+impl HyperService for Router {
     type Request = HyperRequest;
     type Response = HyperResponse;
     type Error = HyperError;
@@ -148,6 +150,8 @@ impl HyperService for HyperRouter {
 
 #[cfg(feature = "hyper_ext")]
 pub mod ext {
+
+    //! Various extension functions for use with Hyper
 
     extern crate cookie;
     extern crate tokio_core;
@@ -232,7 +236,6 @@ pub mod ext {
             self
         }
     }
-
 
     impl ResponseExtensions for HyperResponse {
         fn set_cookies(&mut self, jar: &CookieJar) {

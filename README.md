@@ -1,22 +1,7 @@
 # reset-router
 
-A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Hyper v0.11.x.
-
-Similar to and inspired by [reroute](https://github.com/gsquire/reroute), but for async Hyper and potentially
-faster (no unnecessary string allocations, no hashmaps, and method-first-matching).
-
-Enables request handling for functions that look like `Fn(Request) -> RESPONSE`
-where `Request` is a thin wrapper around `hyper::server::Request` and
-
-```rust,ignore
-RESPONSE: IntoFuture<Future = F, Item = S, Error = E>,
-    F: Future<Item = S, Error = E> + 'static + Send,
-    S: IntoResponse,
-    E: IntoResponse
-```
-
-This means you can return something as simple as `Ok(Response::new())`. You don't have to worry about futures
-unless you need to read the request body or interact with other future-aware things.
+A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with Rust web servers 
+(currently only supports Hyper 0.11.6).
 
 Use like:
 
@@ -29,8 +14,15 @@ let router = Router::build()
 router.quick_serve(8, "0.0.0.0:3000".parse().unwrap(), || Core::new().unwrap() );
 ```
 
-See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for examples.
+See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for how to use the router with Hyper.
 
-Should also work nicely with `futures-await`.
+Works well with [`futures-await`](https://github.com/alexcrichton/futures-await) for a nicer async experience.
 
 License: MIT
+
+
+## Casual changelog
+
+### v0.3.0 (2017-11-01)
+
+* Changed the request wrapper to `Context`
