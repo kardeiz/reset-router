@@ -26,4 +26,7 @@ License: MIT
 
 ### v0.3.0 (2017-11-01)
 
-* Changed the request wrapper to `Context`
+* Made the web server generic. You will need to change imports to e.g. `reset_router::hyper::{Context, Router}` and bring
+your own `hyper`.
+* Changed the request wrapper to `Context` (rename to `Request` on `use` if desired)
+* Deprecated `into_inner` (use `into_request`)
