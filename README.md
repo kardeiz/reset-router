@@ -20,6 +20,7 @@ Works well with [`futures-await`](https://github.com/alexcrichton/futures-await)
 
 License: MIT
 
+-----
 
 ## Casual changelog
 
