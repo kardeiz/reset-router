@@ -7,40 +7,15 @@ license = "MIT"
 name = "reset-router"
 readme = "README.md"
 repository = "https://github.com/kardeiz/reset-router"
-version = "0.3.0"
+version = "0.4.0"
 
 [dependencies]
-error-chain = "0.10.0"
-futures = "~0.1"
-http = "0.1.1"
-regex = "~0.2"
-
-[dependencies.cookie]
-optional = true
-version = "0.10.0"
+failure = "0.1.1"
+futures = "0.1.20"
+http = "0.1.5"
+regex = "0.2.10"
+tokio-service = "0.1.0"
 
 [dependencies.hyper]
-optional = true
-version = "~0.11"
-
-[dependencies.net2]
-optional = true
-version = "0.2.29"
-
-[dependencies.tokio-core]
-optional = true
-version = "~0.1"
-
-[dev-dependencies]
-conduit-mime-types = "0.7.3"
-futures-fs = "0.0.2"
-lazy_static = "0.2.8"
-net2 = "0.2.29"
-num_cpus = "1.4.0"
-tokio-core = "0.1.8"
-log = "0.3.8"
-
-[features]
-default = ["hyper_with_ext"]
-hyper_ext = ["cookie", "tokio-core", "net2"]
-hyper_with_ext = ["hyper", "hyper_ext"]
+features = ["compat"]
+version = "0.11.24"
