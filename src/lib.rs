@@ -1,8 +1,8 @@
-extern crate regex;
-extern crate http;
-extern crate tokio_service;
 extern crate futures;
+extern crate http;
 extern crate hyper;
+extern crate regex;
+extern crate tokio_service;
 
 #[macro_use]
 extern crate failure;
@@ -21,7 +21,7 @@ pub mod err {
         #[fail(display = "{}", _0)]
         Io(#[cause] ::std::io::Error),
         #[fail(display = "{}", _0)]
-        Regex(#[cause] ::regex::Error)
+        Regex(#[cause] ::regex::Error),
     }
 
     pub type Result<T> = ::std::result::Result<T, Error>;
@@ -37,12 +37,13 @@ type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
 
 pub struct Context {
     request: Request<Body>,
-    regex_match: Option<Arc<Regex>>
+    regex_match: Option<Arc<Regex>>,
 }
 
 impl Context {
     pub fn captures(&self) -> Option<Captures> {
-        self.regex_match.as_ref()
+        self.regex_match
+            .as_ref()
             .and_then(|r| r.captures(&self.request.uri().path()))
     }
 
@@ -55,11 +56,11 @@ pub trait CaptureParsing: Sized {
     fn parse_captures(ctx: &Context) -> err::Result<Self>;
 }
 
-
 impl<U: FromStr> CaptureParsing for (U,) {
     fn parse_captures(ctx: &Context) -> err::Result<Self> {
         let captures = ctx.captures().ok_or(err::Error::Captures)?;
-        let out_1 = captures.get(1)
+        let out_1 = captures
+            .get(1)
             .map(|x| x.as_str())
             .and_then(|x| x.parse().ok())
             .ok_or(err::Error::Captures)?;
@@ -70,11 +71,13 @@ impl<U: FromStr> CaptureParsing for (U,) {
 impl<U1: FromStr, U2: FromStr> CaptureParsing for (U1, U2) {
     fn parse_captures(ctx: &Context) -> err::Result<Self> {
         let captures = ctx.captures().ok_or(err::Error::Captures)?;
-        let out_1 = captures.get(1)
+        let out_1 = captures
+            .get(1)
             .map(|x| x.as_str())
             .and_then(|x| x.parse().ok())
             .ok_or(err::Error::Captures)?;
-        let out_2 = captures.get(2)
+        let out_2 = captures
+            .get(2)
             .map(|x| x.as_str())
             .and_then(|x| x.parse().ok())
             .ok_or(err::Error::Captures)?;
@@ -85,15 +88,18 @@ impl<U1: FromStr, U2: FromStr> CaptureParsing for (U1, U2) {
 impl<U1: FromStr, U2: FromStr, U3: FromStr> CaptureParsing for (U1, U2, U3) {
     fn parse_captures(ctx: &Context) -> err::Result<Self> {
         let captures = ctx.captures().ok_or(err::Error::Captures)?;
-        let out_1 = captures.get(1)
+        let out_1 = captures
+            .get(1)
             .map(|x| x.as_str())
             .and_then(|x| x.parse().ok())
             .ok_or(err::Error::Captures)?;
-        let out_2 = captures.get(2)
+        let out_2 = captures
+            .get(2)
             .map(|x| x.as_str())
             .and_then(|x| x.parse().ok())
             .ok_or(err::Error::Captures)?;
-        let out_3 = captures.get(3)
+        let out_3 = captures
+            .get(3)
             .map(|x| x.as_str())
             .and_then(|x| x.parse().ok())
             .ok_or(err::Error::Captures)?;
@@ -106,7 +112,9 @@ pub trait Handler: Send + Sync {
 }
 
 pub trait IntoBoxedHandler {
-    fn into_boxed_handler(self) -> Box<Handler> where Self: Sized + 'static;
+    fn into_boxed_handler(self) -> Box<Handler>
+    where
+        Self: Sized + 'static;
 }
 
 #[derive(Default)]
@@ -163,11 +171,10 @@ impl Router {
     }
 
     fn find_handler_and_context(&self, request: Request<Body>) -> (&Box<Handler>, Context) {
-        if let Some(path_handlers) =
-            self.handlers
-                .get(request.method())
-                .ok()
-                .and_then(|x| x.as_ref())
+        if let Some(path_handlers) = self.handlers
+            .get(request.method())
+            .ok()
+            .and_then(|x| x.as_ref())
         {
             let priorities = &path_handlers.priorities;
             if let Some(i) = path_handlers
@@ -176,18 +183,25 @@ impl Router {
                 .iter()
                 .min_by(|x, y| priorities[*x].cmp(&priorities[*y]))
             {
-
                 let handler = &path_handlers.handlers[i];
                 let regex = &path_handlers.regexes[i];
 
-                let context = Context { request, regex_match: Some(regex.clone()) };
+                let context = Context {
+                    request,
+                    regex_match: Some(regex.clone()),
+                };
 
                 return (handler, context);
             }
         }
 
-        (&self.not_found, Context { request, regex_match: None })
-
+        (
+            &self.not_found,
+            Context {
+                request,
+                regex_match: None,
+            },
+        )
     }
 }
 
@@ -216,12 +230,8 @@ impl<'a> RouterBuilder<'a> {
     where
         H: IntoBoxedHandler + 'static,
     {
-        self.path_handler_parts.push((
-            method,
-            regex,
-            0,
-            handler.into_boxed_handler(),
-        ));
+        self.path_handler_parts
+            .push((method, regex, 0, handler.into_boxed_handler()));
         self
     }
 
@@ -235,24 +245,18 @@ impl<'a> RouterBuilder<'a> {
     where
         H: IntoBoxedHandler + 'static,
     {
-        self.path_handler_parts.push((
-            method,
-            regex,
-            priority,
-            handler.into_boxed_handler(),
-        ));
+        self.path_handler_parts
+            .push((method, regex, priority, handler.into_boxed_handler()));
         self
     }
 
     pub fn finish(self) -> err::Result<Router> {
-
         let mut path_handlers_map = ::std::collections::HashMap::new();
 
         for (method, path, priority, handler) in self.path_handler_parts {
-            let &mut (ref mut paths, ref mut priorities, ref mut handlers) =
-                path_handlers_map.entry(method).or_insert_with(|| {
-                    (Vec::new(), Vec::new(), Vec::new())
-                });
+            let &mut (ref mut paths, ref mut priorities, ref mut handlers) = path_handlers_map
+                .entry(method)
+                .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new()));
             paths.push(path);
             priorities.push(priority);
             handlers.push(handler);
@@ -286,7 +290,8 @@ impl<'a> RouterBuilder<'a> {
 
 impl<F> Handler for F
 where
-    F: Fn(Context) -> BoxFuture<Response<Body>, ::hyper::Error> + Send + Sync {
+    F: Fn(Context) -> BoxFuture<Response<Body>, ::hyper::Error> + Send + Sync,
+{
     fn handle(&self, context: Context) -> BoxFuture<Response<Body>, ::hyper::Error> {
         (self)(context)
     }
@@ -304,14 +309,16 @@ where
     where
         Self: Sized + 'static,
     {
-        Box::new(move |context: Context| -> BoxFuture<Response<Body>, ::hyper::Error> {
-            Box::new(
-                (self)(context)
-                    .into_future()
-                    .map(|s| s.into())
-                    .or_else(|e| Ok(e.into())),
-            )
-        })
+        Box::new(
+            move |context: Context| -> BoxFuture<Response<Body>, ::hyper::Error> {
+                Box::new(
+                    (self)(context)
+                        .into_future()
+                        .map(|s| s.into())
+                        .or_else(|e| Ok(e.into())),
+                )
+            },
+        )
     }
 }
 

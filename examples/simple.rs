@@ -1,11 +1,10 @@
 extern crate http;
-extern crate reset_router;
 extern crate hyper;
+extern crate reset_router;
 
 use std::sync::Arc;
 
 type Response = ::http::Response<::hyper::Body>;
-
 
 fn not_found(_: ::reset_router::Context) -> Result<Response, Response> {
     Ok(::http::Response::builder()
@@ -23,6 +22,8 @@ fn main() {
     let router = Arc::new(router);
 
     let addr = "0.0.0.0:3000".parse().unwrap();
-    let server = ::hyper::server::Http::new().bind_compat(&addr, move || Ok(router.clone())).unwrap();
+    let server = ::hyper::server::Http::new()
+        .bind_compat(&addr, move || Ok(router.clone()))
+        .unwrap();
     server.run().unwrap();
 }
