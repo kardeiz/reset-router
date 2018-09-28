@@ -2,7 +2,6 @@ extern crate futures;
 extern crate http;
 extern crate hyper;
 extern crate regex;
-extern crate tokio_service;
 
 #[macro_use]
 extern crate failure;
@@ -12,8 +11,6 @@ use self::futures::{Future, IntoFuture};
 pub mod err {
     #[derive(Fail, Debug)]
     pub enum Error {
-        #[fail(display = "Not found handler not set")]
-        NotFoundNotSet,
         #[fail(display = "Could not parse captures")]
         Captures,
         #[fail(display = "Method not supported")]
@@ -27,16 +24,44 @@ pub mod err {
     pub type Result<T> = ::std::result::Result<T, Error>;
 }
 
+pub mod common {
+    use std::error::Error;
+    use std::fmt;
+
+    pub type Never = ::hyper::Error;
+
+    // #[derive(Debug)]
+    // pub enum Never {}
+
+    // impl fmt::Display for Never {
+    //     fn fmt(&self, _: &mut fmt::Formatter) -> fmt::Result {
+    //         match *self {}
+    //     }
+    // }
+
+    // impl Error for Never {
+    //     fn description(&self) -> &str {
+    //         match *self {}
+    //     }
+    // }
+
+    // unsafe impl Send for Never {}
+}
+
 use regex::{Captures, Regex, RegexSet};
-use http::{Method, Request, Response};
+use http::{Method, Request as HttpRequest, Response as HttpResponse};
 use hyper::Body;
 use std::str::FromStr;
 use std::sync::Arc;
 
 type BoxFuture<I, E> = Box<Future<Item = I, Error = E>>;
+type NeverFailingFuture<I> = Box<Future<Item = I, Error = ::common::Never> + Send>;
+
+pub type Request = HttpRequest<Body>;
+pub type Response = HttpResponse<Body>;
 
 pub struct Context {
-    request: Request<Body>,
+    request: Request,
     regex_match: Option<Arc<Regex>>,
 }
 
@@ -108,11 +133,11 @@ impl<U1: FromStr, U2: FromStr, U3: FromStr> CaptureParsing for (U1, U2, U3) {
 }
 
 pub trait Handler: Send + Sync {
-    fn handle(&self, Context) -> BoxFuture<Response<Body>, ::hyper::Error>;
+    fn handle(&self, Context) -> NeverFailingFuture<Response>;
 }
 
 pub trait IntoBoxedHandler {
-    fn into_boxed_handler(self) -> Box<Handler>
+    fn into_boxed_handler(self) -> Box<Handler + Send>
     where
         Self: Sized + 'static;
 }
@@ -160,18 +185,21 @@ pub struct PathHandlers {
     handlers: Vec<Box<Handler>>,
 }
 
-pub struct Router {
+struct InnerRouter {
     not_found: Box<Handler>,
-    handlers: MethodMap<Option<PathHandlers>>,
+    handlers: MethodMap<Option<PathHandlers>>
 }
+
+#[derive(Clone)]
+pub struct Router(Arc<InnerRouter>);
 
 impl Router {
     pub fn build<'a>() -> RouterBuilder<'a> {
         RouterBuilder::new()
     }
 
-    fn find_handler_and_context(&self, request: Request<Body>) -> (&Box<Handler>, Context) {
-        if let Some(path_handlers) = self.handlers
+    fn find_handler_and_context(&self, request: Request) -> (&Box<Handler>, Context) {
+        if let Some(path_handlers) = self.0.handlers
             .get(request.method())
             .ok()
             .and_then(|x| x.as_ref())
@@ -196,7 +224,7 @@ impl Router {
         }
 
         (
-            &self.not_found,
+            &self.0.not_found,
             Context {
                 request,
                 regex_match: None,
@@ -251,6 +279,14 @@ impl<'a> RouterBuilder<'a> {
     }
 
     pub fn finish(self) -> err::Result<Router> {
+        
+        fn default_not_found(_: Context) -> Result<Response, Response> {
+            Ok(::http::Response::builder()
+                .status(404)
+                .body("Not found".into())
+                .unwrap())
+        }
+
         let mut path_handlers_map = ::std::collections::HashMap::new();
 
         for (method, path, priority, handler) in self.path_handler_parts {
@@ -262,8 +298,8 @@ impl<'a> RouterBuilder<'a> {
             handlers.push(handler);
         }
 
-        let mut router = Router {
-            not_found: self.not_found.ok_or_else(|| err::Error::NotFoundNotSet)?,
+        let mut router = InnerRouter {
+            not_found: self.not_found.unwrap_or_else(|| default_not_found.into_boxed_handler() ),
             handlers: MethodMap::default(),
         };
 
@@ -284,15 +320,15 @@ impl<'a> RouterBuilder<'a> {
             *router.handlers.get_mut(&method)? = Some(path_handlers);
         }
 
-        Ok(router)
+        Ok(Router(Arc::new(router)))
     }
 }
 
 impl<F> Handler for F
 where
-    F: Fn(Context) -> BoxFuture<Response<Body>, ::hyper::Error> + Send + Sync,
+    F: Fn(Context) -> NeverFailingFuture<Response> + Send + Sync,
 {
-    fn handle(&self, context: Context) -> BoxFuture<Response<Body>, ::hyper::Error> {
+    fn handle(&self, context: Context) -> NeverFailingFuture<Response> {
         (self)(context)
     }
 }
@@ -300,17 +336,17 @@ where
 impl<I, S, E, H> IntoBoxedHandler for H
 where
     I: IntoFuture<Item = S, Error = E>,
-    I::Future: 'static,
-    S: Into<Response<Body>>,
-    E: Into<Response<Body>>,
+    I::Future: 'static + Send,
+    S: Into<Response>,
+    E: Into<Response>,
     H: Fn(Context) -> I + Sync + Send,
 {
-    fn into_boxed_handler(self) -> Box<Handler>
+    fn into_boxed_handler(self) -> Box<Handler + Send>
     where
         Self: Sized + 'static,
     {
         Box::new(
-            move |context: Context| -> BoxFuture<Response<Body>, ::hyper::Error> {
+            move |context: Context| -> NeverFailingFuture<Response> {
                 Box::new(
                     (self)(context)
                         .into_future()
@@ -322,14 +358,27 @@ where
     }
 }
 
-impl ::tokio_service::Service for Router {
-    type Request = Request<Body>;
-    type Response = Response<Body>;
-    type Error = ::hyper::Error;
-    type Future = BoxFuture<Response<Body>, ::hyper::Error>;
+impl ::hyper::service::Service for Router {
+    type ReqBody = Body;
+    type ResBody = Body;
+    type Error = ::common::Never;
+    type Future = Box<Future<Item=Response, Error=Self::Error> + Send>;
 
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         let (handler, ctx) = self.find_handler_and_context(req);
         handler.handle(ctx)
+    }
+}
+
+impl ::hyper::service::NewService for Router {
+    type Service = Router;
+    type ReqBody = <Router as ::hyper::service::Service>::ReqBody;
+    type ResBody = <Router as ::hyper::service::Service>::ResBody;
+    type Error = <Router as ::hyper::service::Service>::Error;
+    type Future = ::futures::future::FutureResult<Router, ::common::Never>;
+    type InitError = ::common::Never;
+
+    fn new_service(&self) -> Self::Future {
+        ::futures::future::ok(self.clone())
     }
 }
