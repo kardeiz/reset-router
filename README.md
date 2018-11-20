@@ -49,7 +49,7 @@ fn main() {
 }
 ```
 
-`RequestExtensions` provides easy access to your route regex captures, as well as access to an optional `State` object. See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for an example.
+`RequestExtensions` provides easy access to your route regex captures, as well as access to an optional `State` object. See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/reset-router/examples/simple.rs) for an example.
 
 If you prefer to keep all your path regexes in one place, of if you want to use closures, you can still use the old style:
 
