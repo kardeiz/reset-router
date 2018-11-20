@@ -85,22 +85,21 @@ where H: Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> +
     fn handle(&self, request: Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> { (self)(request) }
 }
 
-pub trait IntoBoxedHandler: Sized + 'static {
-    fn into_boxed_handler(self) -> Box<Handler + Send>;
-}
+pub struct BoxedHandler(pub Box<Handler + Send>);
 
-impl<H, I, S, E> IntoBoxedHandler for H where 
+impl<H, I, S, E> From<H> for BoxedHandler where 
     I: IntoFuture<Item = S, Error = E>,
     I::Future: 'static + Send,
     S: Into<Response<Body>>,
     E: Into<Response<Body>>,
     H: Fn(Request<Body>) -> I + Sync + Send + 'static {
-    fn into_boxed_handler(self) -> Box<Handler + Send>  {
-        Box::new(move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
-            Box::new(self(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
-        })
+    fn from(t: H) -> Self  {
+        BoxedHandler(Box::new(move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
+            Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
+        }))
     }
 }
+
 
 #[derive(Default)]
 pub struct MethodMap<T> {
@@ -140,8 +139,8 @@ impl<T> MethodMap<T> {
 
 pub struct RouterBuilder<'a, S> {
     state: Option<S>,
-    not_found: Option<Box<Handler>>,
-    path_handler_parts: Vec<(bits::Method, &'a str, usize, Box<Handler>)>
+    not_found: Option<BoxedHandler>,
+    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedHandler)>
 }
 
 impl<'a> RouterBuilder<'a, ()> {
@@ -166,14 +165,23 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
     }
 
     pub fn add_not_found<H>(mut self, handler: H) -> Self
-    where H: IntoBoxedHandler + 'static {
-        self.not_found = Some(handler.into_boxed_handler());
+    where H: Into<BoxedHandler> + 'static {
+        self.not_found = Some(handler.into());
         self
     }
 
     pub fn add<H>(mut self, method: bits::Method, regex: &'a str, handler: H) -> Self
-    where H: IntoBoxedHandler + 'static {
-        self.path_handler_parts.push((method, regex, 0, handler.into_boxed_handler()));
+    where H: Into<BoxedHandler> + 'static {
+        self.path_handler_parts.push((method, regex, 0, handler.into()));
+        self
+    }
+
+    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedHandler)>) -> Self {
+        for route in routes {
+            let (method_bits, regex, priority, handler) = route;
+            let method = bits::Method::from_bits_truncate(method_bits);
+            self = self.add_with_priority(method, regex, priority, handler);
+        }
         self
     }
 
@@ -181,13 +189,13 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
         mut self,
         method: bits::Method,
         regex: &'a str,
-        priority: usize,
+        priority: u8,
         handler: H
     ) -> Self
     where
-        H: IntoBoxedHandler + 'static
+        H: Into<BoxedHandler> + 'static
     {
-        self.path_handler_parts.push((method, regex, priority, handler.into_boxed_handler()));
+        self.path_handler_parts.push((method, regex, priority, handler.into()));
         self
     }
 
@@ -221,7 +229,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
             state: Arc::new(self.state.unwrap()),
             not_found: self
                 .not_found
-                .unwrap_or_else(|| Self::default_not_found.into_boxed_handler()),
+                .unwrap_or_else(|| Self::default_not_found.into()),
             handlers: MethodMap::default()
         };
         
@@ -246,13 +254,13 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
 struct PathHandlers {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
-    priorities: Vec<usize>,
-    handlers: Vec<Arc<Box<Handler>>>
+    priorities: Vec<u8>,
+    handlers: Vec<Arc<BoxedHandler>>
 }
 
 struct InnerRouter<S> {
     state: Arc<S>,
-    not_found: Box<Handler>,
+    not_found: BoxedHandler,
     handlers: MethodMap<Option<PathHandlers>>
 }
 
@@ -286,12 +294,12 @@ impl<S: 'static + Send + Sync> Handler for Router<S> {
                     extensions_mut.insert(MatchingRegex(regex.clone()));
                 }
 
-                return handler.handle(request);
+                return (handler.0).handle(request);
             }
         }
 
         request.extensions_mut().insert(State(self.0.state.clone()));
-        self.0.not_found.handle(request)
+        (((self.0).not_found).0).handle(request)
     }
 }
 

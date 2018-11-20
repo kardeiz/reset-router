@@ -19,7 +19,7 @@ pub struct State {
 
 pub mod other {
     #[route(path=r"^/goodbye$", methods="GET")]
-    fn goodbye(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, http::Response<hyper::Body>> {
+    pub fn goodbye(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, http::Response<hyper::Body>> {
         Ok(::http::Response::builder()
             .status(200)
             .body("GOODBYE".into())
@@ -27,8 +27,8 @@ pub mod other {
     }
 }
 
-#[route(path=r"^/hello/(.+)$", methods="GET, POST")]
-fn hello(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, http::Response<hyper::Body>> {
+#[get(r"^/hello/(.+)$", priority=1)]
+pub fn hello(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, http::Response<hyper::Body>> {
 
     let greetings = &req.state::<State>().expect("NO STATE").greetings;
     let (name,) = req.parsed_captures::<(String,)>().expect("NO CAPS");
@@ -47,8 +47,6 @@ fn main() {
         ])
         .finish()
         .unwrap();
-
-    // println!("{:?}", &router.0.state);
 
     let addr = "0.0.0.0:3000".parse().unwrap();
 
