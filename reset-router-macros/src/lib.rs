@@ -11,7 +11,6 @@ use quote::quote;
 
 use syn::*;
 
-/// Add one to an expression.
 #[proc_macro_hack]
 pub fn routes(item: TokenStream) -> TokenStream {
     use syn::parse::Parser;
