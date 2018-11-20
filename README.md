@@ -49,4 +49,16 @@ fn main() {
 
 `RequestExtensions` provides easy access to your route regex captures, as well as access to an optional `State` object. See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/examples/simple.rs) for an example.
 
+If you prefer to keep all your path regexes in one place, of if you want to use closures, you can still use the old style:
+
+```rust,ignore
+// Use this custom bitflags instead of http::Method for easy `BitOr` style method combinations
+use reset_router::bits::Method;
+
+let router = reset_router::Router::build()
+    .add(Method::GET | method::POST, r"^/hello/([^/]+)/(\d+)$", hello)
+    .finish()
+    .unwrap();
+```
+
 License: MIT
