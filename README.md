@@ -20,8 +20,10 @@ unless you need to read the request body or interact with other future-aware thi
 
 ## Usage:
 
-```rust,ignore
+```rust
+
 use reset_router::RequestExtensions;
+
 // Example handler from Rocket
 #[get(r"^/hello/([^/]+)/(\d+)$")]
 pub fn hello(req: Request) -> Result<Response> {    
@@ -51,7 +53,8 @@ fn main() {
 
 If you prefer to keep all your path regexes in one place, of if you want to use closures, you can still use the old style:
 
-```rust,ignore
+```rust
+
 // Use this custom bitflags instead of http::Method for easy `BitOr` style method combinations
 use reset_router::bits::Method;
 
