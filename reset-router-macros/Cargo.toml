@@ -1,0 +1,16 @@
+[package]
+authors = ["Jacob Brown <kardeiz@gmail.com>"]
+name = "reset-router-macros"
+version = "0.1.0"
+
+[dependencies]
+proc-macro-hack = "0.5.2"
+proc-macro2 = "0.4.24"
+quote = "0.6.10"
+
+[dependencies.syn]
+features = ["full", "extra-traits"]
+version = "0.15.18"
+
+[lib]
+proc-macro = true
