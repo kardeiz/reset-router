@@ -8,43 +8,42 @@ extern crate reset_router;
 
 use hyper::rt::Future;
 
-use reset_router::{Router, RequestExtensions};
-// use reset_router::add_one;
-
+use reset_router::Router;
 
 #[derive(Clone, Debug)]
 pub struct State {
-    pub greetings: String
+    pub goodbye: String
 }
 
-pub mod other {
-    #[route(path=r"^/goodbye$", methods="GET")]
-    pub fn goodbye(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, http::Response<hyper::Body>> {
+pub mod handlers {
+
+    pub type Request = http::Request<hyper::Body>;
+    pub type Response = http::Response<hyper::Body>;
+    pub type Result<T> = std::result::Result<T, Response>;
+
+    use reset_router::RequestExtensions;
+    use super::State;
+
+    #[route(path="^/goodbye$", methods="GET, POST")]
+    pub fn goodbye(req: Request) -> Result<Response> {
+        let state = req.state::<State>().unwrap();
+        Ok(http::Response::builder().status(200).body(state.goodbye.clone().into()).unwrap())
+    }
+
+    #[get(r"^/hello/([^/]+)/(\d+)$")]
+    pub fn hello(req: Request) -> Result<Response> {    
+        let (name, age) = req.parsed_captures::<(String, u8)>()?;
         Ok(::http::Response::builder()
             .status(200)
-            .body("GOODBYE".into())
+            .body(format!("Hello, {} year old named {}!", age, name).into())
             .unwrap())
     }
 }
 
-#[get(r"^/hello/(.+)$", priority=1)]
-pub fn hello(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, http::Response<hyper::Body>> {
-
-    let greetings = &req.state::<State>().expect("NO STATE").greetings;
-    let (name,) = req.parsed_captures::<(String,)>().expect("NO CAPS");
-    Ok(::http::Response::builder()
-        .status(200)
-        .body(format!("{}, {}", greetings, name).into())
-        .unwrap())
-}
-
 fn main() {
-    let router = ::reset_router::Router::build()
-        .with_state(State { greetings: "Greetings".into() })
-        .add_routes(routes![
-            hello,
-            other::goodbye
-        ])
+    let router = reset_router::Router::build()
+        .with_state(State { goodbye: "Goodbye".into() })
+        .add_routes(routes![handlers::hello, handlers::goodbye])
         .finish()
         .unwrap();
 

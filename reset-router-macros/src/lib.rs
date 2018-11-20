@@ -4,8 +4,8 @@ extern crate proc_macro_hack;
 extern crate quote;
 extern crate syn;
 
-use proc_macro2::{Span, TokenStream as TokenStream2};
 use proc_macro::TokenStream;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use proc_macro_hack::proc_macro_hack;
 use quote::quote;
 
@@ -15,9 +15,7 @@ use syn::*;
 pub fn routes(item: TokenStream) -> TokenStream {
     use syn::parse::Parser;
 
-    let paths = <punctuated::Punctuated<Path, token::Comma>>::parse_terminated
-        .parse(item)
-        .unwrap();
+    let paths = <punctuated::Punctuated<Path, token::Comma>>::parse_terminated.parse(item).unwrap();
 
     let parts = paths
         .iter()
@@ -26,8 +24,10 @@ pub fn routes(item: TokenStream) -> TokenStream {
             {
                 let mut last_seg = fn_name_path.segments.last_mut().unwrap();
                 last_seg.value_mut().ident = Ident::new(
-                    &format!("RESET_ROUTER_ROUTE_PARTS_FOR_{}", 
-                        last_seg.value().ident.to_string().trim_left_matches("r#").to_owned()),
+                    &format!(
+                        "RESET_ROUTER_ROUTE_PARTS_FOR_{}",
+                        last_seg.value().ident.to_string().trim_left_matches("r#").to_owned()
+                    ),
                     Span::call_site()
                 );
             }
@@ -45,9 +45,7 @@ pub fn routes(item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn get(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    named_route(attrs, item, "GET")
-}
+pub fn get(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "GET") }
 
 #[proc_macro_attribute]
 pub fn post(attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -55,9 +53,7 @@ pub fn post(attrs: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn put(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    named_route(attrs, item, "PUT")
-}
+pub fn put(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "PUT") }
 
 #[proc_macro_attribute]
 pub fn patch(attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -82,7 +78,7 @@ pub fn route(attrs: TokenStream, item: TokenStream) -> TokenStream {
 
 fn named_route(attrs: TokenStream, item: TokenStream, method: &str) -> TokenStream {
     let mut attrs = parse_macro_input!(attrs as AttributeArgs);
-    let mut new_attrs = Vec::with_capacity(attrs.len());    
+    let mut new_attrs = Vec::with_capacity(attrs.len());
     for attr in attrs.into_iter() {
         if let NestedMeta::Literal(ref lit) = attr {
             new_attrs.push(NestedMeta::Meta(Meta::NameValue(parse_quote!(path=#lit))));
@@ -95,41 +91,60 @@ fn named_route(attrs: TokenStream, item: TokenStream, method: &str) -> TokenStre
 }
 
 fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
-
     let item = parse_macro_input!(item as ItemFn);
-    
-    let params = attrs.iter()
-        .filter_map(|x| match x { NestedMeta::Meta(y) => Some(y), _ => None })
-        .filter_map(|x| match x { Meta::NameValue(y) => Some(y), _ => None });
 
-    let regex_str = params.clone().find(|x| x.ident == "path" )
-        .and_then(|x| match x.lit { Lit::Str(ref y) => Some(y), _ => None })
-        .map(|x| x.value() )
+    let params = attrs
+        .iter()
+        .filter_map(|x| match x {
+            NestedMeta::Meta(y) => Some(y),
+            _ => None
+        })
+        .filter_map(|x| match x {
+            Meta::NameValue(y) => Some(y),
+            _ => None
+        });
+
+    let regex_str = params
+        .clone()
+        .find(|x| x.ident == "path")
+        .and_then(|x| match x.lit {
+            Lit::Str(ref y) => Some(y),
+            _ => None
+        })
+        .map(|x| x.value())
         .expect("No path provided");
 
-    let methods_str = params.clone().find(|x| x.ident == "methods" )
-        .and_then(|x| match x.lit { Lit::Str(ref y) => Some(y), _ => None })
-        .map(|x| x.value() )
+    let methods_str = params
+        .clone()
+        .find(|x| x.ident == "methods")
+        .and_then(|x| match x.lit {
+            Lit::Str(ref y) => Some(y),
+            _ => None
+        })
+        .map(|x| x.value())
         .expect("No method provided");
 
-    let priority_int = params.clone().find(|x| x.ident == "priority" )
-        .and_then(|x| match x.lit { Lit::Int(ref y) => Some(y), _ => None })
-        .map(|x| x.value() as u8 )
+    let priority_int = params
+        .clone()
+        .find(|x| x.ident == "priority")
+        .and_then(|x| match x.lit {
+            Lit::Int(ref y) => Some(y),
+            _ => None
+        })
+        .map(|x| x.value() as u8)
         .unwrap_or_else(|| 0);
 
     let method_bits = {
-        let mut method_iter = methods_str.split(",").map( |x| x.trim().to_lowercase() );
+        let mut method_iter = methods_str.split(",").map(|x| x.trim().to_lowercase());
 
-        let cls = |s: &str| {
-            match s {
-                "get" => quote!(_reset_router::bits::Method::GET),
-                "post" => quote!(_reset_router::bits::Method::POST),
-                "put" => quote!(_reset_router::bits::Method::PUT),
-                "patch" => quote!(_reset_router::bits::Method::PATCH),
-                "head" => quote!(_reset_router::bits::Method::HEAD),
-                "delete" => quote!(_reset_router::bits::Method::DELETE),
-                _ => panic!("Unknown method parameter")
-            }
+        let cls = |s: &str| match s {
+            "get" => quote!(_reset_router::bits::Method::GET),
+            "post" => quote!(_reset_router::bits::Method::POST),
+            "put" => quote!(_reset_router::bits::Method::PUT),
+            "patch" => quote!(_reset_router::bits::Method::PATCH),
+            "head" => quote!(_reset_router::bits::Method::HEAD),
+            "delete" => quote!(_reset_router::bits::Method::DELETE),
+            _ => panic!("Unknown method parameter")
         };
 
         let first = method_iter.next();
@@ -141,14 +156,16 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
                     let val = cls(&val);
                     quote!(#acc | #val)
                 })
-            },
+            }
             _ => quote!(_reset_router::bits::Method::all())
         }
-
     };
 
     let fn_name = Ident::new(
-        &format!("RESET_ROUTER_ROUTE_PARTS_FOR_{}", item.ident.to_string().trim_left_matches("r#").to_owned()),
+        &format!(
+            "RESET_ROUTER_ROUTE_PARTS_FOR_{}",
+            item.ident.to_string().trim_left_matches("r#").to_owned()
+        ),
         Span::call_site()
     );
 
@@ -165,7 +182,5 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         }
     };
 
-
     out.into()
-
 }
