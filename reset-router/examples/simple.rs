@@ -41,10 +41,10 @@ fn hello(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>,
 fn main() {
     let router = ::reset_router::Router::build()
         .with_state(State { greetings: "Greetings".into() })
-        .add_routes(routes![[
+        .add_routes(routes![
             hello,
             other::goodbye
-        ]])
+        ])
         .finish()
         .unwrap();
 

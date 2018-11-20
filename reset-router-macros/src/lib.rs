@@ -14,7 +14,32 @@ use syn::*;
 /// Add one to an expression.
 #[proc_macro_hack]
 pub fn routes(item: TokenStream) -> TokenStream {
-    panic!("{:#?}", TokenStream2::from(item));
+    // panic!("{:#?}", TokenStream2::from(item));
+    use syn::parse::Parser;
+
+    let paths = <punctuated::Punctuated<Path, token::Comma>>::parse_terminated
+        .parse(item)
+        .unwrap();
+
+    let parts = paths
+        .iter()
+        .map(|path| {
+            let mut const_name_path = path.clone();
+            {
+                let mut last_seg = const_name_path.segments.last_mut().unwrap();
+                last_seg.value_mut().ident = Ident::new(
+                    &format!("RESET_ROUTER_ROUTE_PARTS_FOR_{}", last_seg.value().ident.to_string().trim_left_matches("r#").to_owned()),
+                    Span::call_site()
+                );
+            }
+            quote!((#const_name_path, #path))
+        })
+        .collect::<Vec<_>>();
+
+
+
+    panic!("{}", parts.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "));
+
     // let mut item_iter = TokenStream2::from(item).into_iter();
     
     // let mut arr = Vec::new();
@@ -104,7 +129,7 @@ pub fn route(attrs: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let const_name = Ident::new(
-        &format!("RESET_ROUTER_ROUTE_PARTS_FOR_{}", item.ident.to_string().to_uppercase()),
+        &format!("RESET_ROUTER_ROUTE_PARTS_FOR_{}", item.ident.to_string().trim_left_matches("r#").to_owned()),
         Span::call_site()
     );
 
@@ -113,11 +138,11 @@ pub fn route(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let out = quote!{
         #item
         #[allow(non_upper_case_globals, unused_attributes, unused_qualifications)]
-        const #const_name: (&'static str, u32, &'static str) = {
+        const #const_name: (&'static str, u32) = {
             #[allow(unknown_lints)]
             #[cfg_attr(feature = "cargo-clippy", allow(useless_attribute))]
             extern crate reset_router as _reset_router;
-            (#path_str, (#method_bits).bits, #item_ident)
+            (#path_str, (#method_bits).bits)
         };
     };
 
