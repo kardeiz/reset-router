@@ -41,7 +41,7 @@ pub mod handlers {
 }
 
 fn main() {
-    let router = reset_router::Router::build()
+    let router = Router::build()
         .with_state(State { goodbye: "Goodbye".into() })
         .add_routes(routes![handlers::hello, handlers::goodbye])
         .finish()

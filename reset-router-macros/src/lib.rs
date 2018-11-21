@@ -5,7 +5,7 @@ extern crate quote;
 extern crate syn;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::Span;
 use proc_macro_hack::proc_macro_hack;
 use quote::quote;
 
@@ -44,32 +44,55 @@ pub fn routes(item: TokenStream) -> TokenStream {
     out.into()
 }
 
+/// Use like `#[get("/path")]`
+///
+/// Optionally include priority, e.g.: `#[get("/path", priority=1)]`
 #[proc_macro_attribute]
 pub fn get(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "GET") }
 
+/// Use like `#[post("/path")]`
+///
+/// Optionally include priority, e.g.: `#[post("/path", priority=1)]`
 #[proc_macro_attribute]
 pub fn post(attrs: TokenStream, item: TokenStream) -> TokenStream {
     named_route(attrs, item, "POST")
 }
 
+/// Use like `#[put("/path")]`
+///
+/// Optionally include priority, e.g.: `#[put("/path", priority=1)]`
 #[proc_macro_attribute]
 pub fn put(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "PUT") }
 
+/// Use like `#[patch("/path")]`
+///
+/// Optionally include priority, e.g.: `#[patch("/path", priority=1)]`
 #[proc_macro_attribute]
 pub fn patch(attrs: TokenStream, item: TokenStream) -> TokenStream {
     named_route(attrs, item, "PATCH")
 }
 
+/// Use like `#[head("/path")]`
+///
+/// Optionally include priority, e.g.: `#[head("/path", priority=1)]`
 #[proc_macro_attribute]
 pub fn head(attrs: TokenStream, item: TokenStream) -> TokenStream {
     named_route(attrs, item, "HEAD")
 }
 
+/// Use like `#[delete("/path")]`
+///
+/// Optionally include priority, e.g.: `#[delete("/path", priority=1)]`
 #[proc_macro_attribute]
 pub fn delete(attrs: TokenStream, item: TokenStream) -> TokenStream {
     named_route(attrs, item, "DELETE")
 }
 
+/// Use like `#[route(path="/path")]`
+///
+/// Optionally include comma separated HTTP methods to match , e.g.: `#[route(path="/path", methods="GET, POST")]`
+///
+/// Optionally include priority, e.g.: `#[route(path="/path", methods="GET, POST", priority=1)]`
 #[proc_macro_attribute]
 pub fn route(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = parse_macro_input!(attrs as AttributeArgs);
@@ -77,7 +100,7 @@ pub fn route(attrs: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn named_route(attrs: TokenStream, item: TokenStream, method: &str) -> TokenStream {
-    let mut attrs = parse_macro_input!(attrs as AttributeArgs);
+    let attrs = parse_macro_input!(attrs as AttributeArgs);
     let mut new_attrs = Vec::with_capacity(attrs.len());
     for attr in attrs.into_iter() {
         if let NestedMeta::Literal(ref lit) = attr {
@@ -122,7 +145,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
             _ => None
         })
         .map(|x| x.value())
-        .expect("No method provided");
+        .unwrap_or_else(|| "".into() );
 
     let priority_int = params
         .clone()
@@ -168,8 +191,6 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         ),
         Span::call_site()
     );
-
-    let item_ident = item.ident.to_string();
 
     let out = quote!{
         #item
