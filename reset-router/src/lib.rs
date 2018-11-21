@@ -1,11 +1,11 @@
 //! # reset-router
-//! 
+//!
 //! A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with async Hyper.
-//! 
+//!
 //! Provides optional attribute based routing with Rust 1.30's proc_macro_attributes.
-//! 
+//!
 //! Your handler functions should look like:
-//! 
+//!
 //! ```rust
 //! Fn(http::Request<hyper::Body>) -> I
 //! where
@@ -14,16 +14,16 @@
 //!     S: Into<http::Response<hyper::Body>>,
 //!     E: Into<http::Response<hyper::Body>>,
 //! ```
-//! 
+//!
 //! Pretty straightforward! You can return something as simple as `Ok(Response::new())`. You don't have to worry about futures
 //! unless you need to read the request body or interact with other future-aware things.
-//! 
+//!
 //! ## Usage:
-//! 
+//!
 //! ```rust
-//! 
+//!
 //! use reset_router::RequestExtensions;
-//! 
+//!
 //! // Example handler from Rocket
 //! #[get(r"^/hello/([^/]+)/(\d+)$")]
 //! pub fn hello(req: Request) -> Result<Response> {    
@@ -33,37 +33,37 @@
 //!         .body(format!("Hello, {} year old named {}!", age, name).into())
 //!         .unwrap())
 //! }
-//! 
+//!
 //! fn main() {
 //!     let router = reset_router::Router::build()
 //!         .add_routes(routes![hello])
 //!         .finish()
 //!         .unwrap();
-//! 
+//!
 //!     let addr = "0.0.0.0:3000".parse().unwrap();
-//! 
+//!
 //!     let server =
 //!         hyper::Server::bind(&addr).serve(router).map_err(|e| eprintln!("server error: {}", e));
-//! 
+//!
 //!     hyper::rt::run(server);
 //! }
 //! ```
-//! 
+//!
 //! `RequestExtensions` provides easy access to your route regex captures, as well as access to an optional `State` object. See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/reset-router/examples/simple.rs) for an example.
-//! 
+//!
 //! If you prefer to keep all your path regexes in one place, of if you want to use closures, you can still use the old style:
-//! 
+//!
 //! ```rust
-//! 
+//!
 //! // Use this custom bitflags instead of http::Method for easy `BitOr` style method combinations
 //! use reset_router::bits::Method;
-//! 
+//!
 //! let router = reset_router::Router::build()
 //!     .add(Method::GET | method::POST, r"^/hello/([^/]+)/(\d+)$", hello)
 //!     .finish()
 //!     .unwrap();
 //! ```
-//! 
+//!
 //! License: MIT
 
 extern crate bitflags;
@@ -78,7 +78,7 @@ extern crate failure;
 extern crate proc_macro_hack;
 extern crate reset_router_macros;
 
-pub use reset_router_macros::{get, post, put, patch, head, delete, route};
+pub use reset_router_macros::{delete, get, head, patch, post, put, route};
 
 use proc_macro_hack::proc_macro_hack;
 #[proc_macro_hack]
@@ -101,14 +101,10 @@ pub mod err {
 
     impl From<Error> for http::Response<hyper::Body> {
         fn from(t: Error) -> Self {
-            http::Response::builder()
-                .status(500)
-                .body(t.to_string().into())
-                .unwrap()
+            http::Response::builder().status(500).body(t.to_string().into()).unwrap()
         }
     }
 }
-
 
 pub mod bits {
 
@@ -146,24 +142,11 @@ impl std::error::Error for Never {
     fn description(&self) -> &str { match *self {} }
 }
 
-pub trait Handler: Send + Sync {
-    fn handle(&self, Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send>;
-}
+type Handler =
+    Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync;
 
-impl<H> Handler for H
-where H: Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync
-{
-    fn handle(
-        &self,
-        request: Request<Body>
-    ) -> Box<Future<Item = Response<Body>, Error = Never> + Send>
-    {
-        (self)(request)
-    }
-}
-
-/// Container for the boxed handler
-pub struct BoxedHandler(Box<Handler + Send>);
+/// Container for the boxed handler functions
+pub struct BoxedHandler(Box<Handler>);
 
 impl<H, I, S, E> From<H> for BoxedHandler
 where
@@ -179,42 +162,6 @@ where
         }))
     }
 }
-
-// impl<H> hyper::service::Service for H
-// where H: Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync
-// {
-//     type Error = Never;
-//     type Future = Box<Future<Item = Response<Self::ResBody>, Error = Self::Error> + Send>;
-//     type ReqBody = Body;
-//     type ResBody = Body;
-
-//     fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future { (self)(req) }
-// }
-
-/// Container for the boxed handler
-pub struct BoxedService(Box<hyper::service::Service<
-    ReqBody=Body,
-    ResBody=Body,
-    Error=Never, 
-    Future=Box<Future<Item=Response<Body>, Error=Never> + Send>
-> + Send>);
-
-impl<H, I, S, E> From<H> for BoxedService
-where
-    I: IntoFuture<Item = S, Error = E>,
-    I::Future: 'static + Send,
-    S: Into<Response<Body>>,
-    E: Into<Response<Body>>,
-    H: Fn(Request<Body>) -> I + Sync + Send + 'static
-{
-    fn from(t: H) -> Self {
-        let cls = move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
-            Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
-        };
-        BoxedService(Box::new(hyper::service::service_fn(cls)))
-    }
-}
-
 
 #[derive(Default)]
 struct MethodMap<T> {
@@ -252,10 +199,11 @@ impl<T> MethodMap<T> {
     }
 }
 
+/// Builder for a `Router`
 pub struct RouterBuilder<'a, S> {
     state: Option<S>,
-    not_found: Option<BoxedService>,
-    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedService)>
+    not_found: Option<BoxedHandler>,
+    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedHandler)>
 }
 
 impl<'a> RouterBuilder<'a, ()> {
@@ -265,26 +213,29 @@ impl<'a> RouterBuilder<'a, ()> {
 }
 
 impl<'a, S: 'static> RouterBuilder<'a, S> {
-    
+    fn default_not_found(_: Request<Body>) -> Result<Response<Body>, Response<Body>> {
+        Ok(http::Response::builder().status(404).body("Not found".into()).unwrap())
+    }
+
     pub fn with_state<O>(self, state: O) -> RouterBuilder<'a, O> {
         let RouterBuilder { not_found, path_handler_parts, .. } = self;
         RouterBuilder { state: Some(state), not_found, path_handler_parts }
     }
 
     pub fn add_not_found<H>(mut self, handler: H) -> Self
-    where H: Into<BoxedService> + 'static {
+    where H: Into<BoxedHandler> + 'static {
         self.not_found = Some(handler.into());
         self
     }
 
     /// Add handler for method and regex. Priority is 0 by default.
     pub fn add<H>(mut self, method: bits::Method, regex: &'a str, handler: H) -> Self
-    where H: Into<BoxedService> + 'static {
+    where H: Into<BoxedHandler> + 'static {
         self.path_handler_parts.push((method, regex, 0, handler.into()));
         self
     }
 
-    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedService)>) -> Self {
+    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedHandler)>) -> Self {
         for route in routes {
             let (method_bits, regex, priority, handler) = route;
             let method = bits::Method::from_bits_truncate(method_bits);
@@ -293,7 +244,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
         self
     }
 
-    /// Specify the priority for this regex match. 
+    /// Specify the priority for this regex match.
     /// Default is 0. Lowest match wins.
     pub fn add_with_priority<H>(
         mut self,
@@ -303,7 +254,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
         handler: H
     ) -> Self
     where
-        H: Into<BoxedService> + 'static
+        H: Into<BoxedHandler> + 'static
     {
         self.path_handler_parts.push((method, regex, priority, handler.into()));
         self
@@ -338,7 +289,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
 
         let mut router = InnerRouter {
             state: self.state.map(Arc::new),
-            not_found: self.not_found.unwrap_or_else(|| Router::default_not_found.into()),
+            not_found: self.not_found.unwrap_or_else(|| Self::default_not_found.into()),
             handlers: MethodMap::default()
         };
 
@@ -362,79 +313,33 @@ struct PathHandlers {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
     priorities: Vec<u8>,
-    handlers: Vec<Arc<BoxedService>>
+    handlers: Vec<Arc<BoxedHandler>>
 }
 
 struct InnerRouter<S> {
     state: Option<Arc<S>>,
-    not_found: BoxedService,
+    not_found: BoxedHandler,
     handlers: MethodMap<Option<PathHandlers>>
 }
 
+/// The routing service
 #[derive(Clone)]
 pub struct Router<S>(Arc<InnerRouter<S>>);
 
 impl Router<()> {
     pub fn build<'a>() -> RouterBuilder<'a, ()> { RouterBuilder::new() }
-
-    fn default_not_found(_: Request<Body>) -> Result<Response<Body>, Response<Body>> {
-        Ok(http::Response::builder().status(404).body("Not found".into()).unwrap())
-    }
 }
 
-// impl<S: 'static + Send + Sync> Handler for Router<S> {
-//     fn handle(
-//         &self,
-//         request: Request<Body>
-//     ) -> Box<Future<Item = Response<Body>, Error = Never> + Send>
-//     {
-//         let mut request = request;
-
-//         if let Some(path_handlers) =
-//             self.0.handlers.get(request.method()).ok().and_then(|x| x.as_ref())
-//         {
-//             let priorities = &path_handlers.priorities;
-//             if let Some(i) = path_handlers
-//                 .regex_set
-//                 .matches(request.uri().path())
-//                 .iter()
-//                 .min_by(|x, y| priorities[*x].cmp(&priorities[*y]))
-//             {
-//                 let handler = &path_handlers.handlers[i];
-//                 let regex = &path_handlers.regexes[i];
-
-//                 {
-//                     let extensions_mut = request.extensions_mut();
-
-//                     if let Some(ref state) = self.0.state {
-//                         extensions_mut.insert(State(state.clone()));
-//                     }
-                    
-//                     extensions_mut.insert(MatchingRegex(regex.clone()));
-//                 }
-
-//                 return (handler.0).call(request);
-//             }
-//         }
-
-//         if let Some(ref state) = self.0.state {
-//             request.extensions_mut().insert(State(state.clone()));
-//         }
-        
-//         (((self.0).not_found).0).call(request)
-//     }
-// }
-
 impl<S: 'static + Send + Sync> Router<S> {
-    fn handle(
-        &mut self,
+    fn inner_call(
+        &self,
         request: Request<Body>
     ) -> Box<Future<Item = Response<Body>, Error = Never> + Send>
     {
         let mut request = request;
 
         if let Some(path_handlers) =
-            self.0.clone().handlers.get(request.method()).ok().and_then(|x| x.as_ref())
+            self.0.handlers.get(request.method()).ok().and_then(|x| x.as_ref())
         {
             let priorities = &path_handlers.priorities;
             if let Some(i) = path_handlers
@@ -443,8 +348,8 @@ impl<S: 'static + Send + Sync> Router<S> {
                 .iter()
                 .min_by(|x, y| priorities[*x].cmp(&priorities[*y]))
             {
-                let handler = &mut path_handlers.handlers[i];
-                let regex = &mut path_handlers.regexes[i];
+                let handler = &path_handlers.handlers[i];
+                let regex = &path_handlers.regexes[i];
 
                 {
                     let extensions_mut = request.extensions_mut();
@@ -452,25 +357,24 @@ impl<S: 'static + Send + Sync> Router<S> {
                     if let Some(ref state) = self.0.state {
                         extensions_mut.insert(State(state.clone()));
                     }
-                    
+
                     extensions_mut.insert(MatchingRegex(regex.clone()));
                 }
 
-                return (handler.0).call(request);
+                return (handler.0)(request);
             }
         }
 
         if let Some(ref state) = self.0.state {
             request.extensions_mut().insert(State(state.clone()));
         }
-        
-        (((self.0).not_found).0).call(request)
+
+        (((self.0).not_found).0)(request)
     }
 }
 
 struct State<S>(pub S);
 struct MatchingRegex(Arc<Regex>);
-
 
 /// Extensions to `http::Request` to support easy access to captures and `State` object
 pub trait RequestExtensions {
@@ -480,7 +384,6 @@ pub trait RequestExtensions {
 }
 
 impl RequestExtensions for Request<Body> {
-    
     /// Any captures provided by the matching `Regex` for the current path
     fn captures(&self) -> Option<Captures> {
         self.extensions().get::<MatchingRegex>().and_then(|r| r.0.captures(self.uri().path()))
@@ -495,6 +398,7 @@ impl RequestExtensions for Request<Body> {
     }
 }
 
+/// Implemented for `T: FromStr` tups up to 4
 pub trait CaptureParsing: Sized {
     fn parse_captures(request: &Request<Body>) -> err::Result<Self>;
 }
@@ -583,7 +487,7 @@ impl<S: 'static + Send + Sync> ::hyper::service::Service for Router<S> {
     type ReqBody = Body;
     type ResBody = Body;
 
-    fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future { self.handle(req) }
+    fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future { self.inner_call(req) }
 }
 
 impl<S: 'static + Send + Sync + Clone> ::hyper::service::NewService for Router<S> {

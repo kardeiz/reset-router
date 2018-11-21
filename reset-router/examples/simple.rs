@@ -21,17 +21,17 @@ pub mod handlers {
     pub type Response = http::Response<hyper::Body>;
     pub type Result<T> = std::result::Result<T, Response>;
 
-    use reset_router::RequestExtensions;
     use super::State;
+    use reset_router::RequestExtensions;
 
-    #[route(path="^/goodbye$", methods="GET, POST")]
+    #[route(path = "^/goodbye$", methods = "GET, POST")]
     pub fn goodbye(req: Request) -> Result<Response> {
         let state = req.state::<State>().unwrap();
         Ok(http::Response::builder().status(200).body(state.goodbye.clone().into()).unwrap())
     }
 
     #[get(r"^/hello/([^/]+)/(\d+)$")]
-    pub fn hello(req: Request) -> Result<Response> {    
+    pub fn hello(req: Request) -> Result<Response> {
         let (name, age) = req.parsed_captures::<(String, u8)>()?;
         Ok(::http::Response::builder()
             .status(200)

@@ -145,7 +145,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
             _ => None
         })
         .map(|x| x.value())
-        .unwrap_or_else(|| "".into() );
+        .unwrap_or_else(|| "".into());
 
     let priority_int = params
         .clone()
@@ -158,7 +158,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         .unwrap_or_else(|| 0);
 
     let method_bits = {
-        let mut method_iter = methods_str.split(",").map(|x| x.trim().to_lowercase());
+        let mut method_iter = methods_str.split(',').map(|x| x.trim().to_lowercase());
 
         let cls = |s: &str| match s {
             "get" => quote!(_reset_router::bits::Method::GET),
