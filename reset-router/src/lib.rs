@@ -180,9 +180,40 @@ where
     }
 }
 
+// impl<H> hyper::service::Service for H
+// where H: Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync
+// {
+//     type Error = Never;
+//     type Future = Box<Future<Item = Response<Self::ResBody>, Error = Self::Error> + Send>;
+//     type ReqBody = Body;
+//     type ResBody = Body;
 
+//     fn call(&mut self, req: Request<Self::ReqBody>) -> Self::Future { (self)(req) }
+// }
 
+/// Container for the boxed handler
+pub struct BoxedService(Box<hyper::service::Service<
+    ReqBody=Body,
+    ResBody=Body,
+    Error=Never, 
+    Future=Box<Future<Item=Response<Body>, Error=Never> + Send>
+> + Send>);
 
+impl<H, I, S, E> From<H> for BoxedService
+where
+    I: IntoFuture<Item = S, Error = E>,
+    I::Future: 'static + Send,
+    S: Into<Response<Body>>,
+    E: Into<Response<Body>>,
+    H: Fn(Request<Body>) -> I + Sync + Send + 'static
+{
+    fn from(t: H) -> Self {
+        let cls = move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
+            Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
+        };
+        BoxedService(Box::new(hyper::service::service_fn(cls)))
+    }
+}
 
 
 #[derive(Default)]
@@ -223,8 +254,8 @@ impl<T> MethodMap<T> {
 
 pub struct RouterBuilder<'a, S> {
     state: Option<S>,
-    not_found: Option<BoxedHandler>,
-    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedHandler)>
+    not_found: Option<BoxedService>,
+    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedService)>
 }
 
 impl<'a> RouterBuilder<'a, ()> {
@@ -241,19 +272,19 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
     }
 
     pub fn add_not_found<H>(mut self, handler: H) -> Self
-    where H: Into<BoxedHandler> + 'static {
+    where H: Into<BoxedService> + 'static {
         self.not_found = Some(handler.into());
         self
     }
 
     /// Add handler for method and regex. Priority is 0 by default.
     pub fn add<H>(mut self, method: bits::Method, regex: &'a str, handler: H) -> Self
-    where H: Into<BoxedHandler> + 'static {
+    where H: Into<BoxedService> + 'static {
         self.path_handler_parts.push((method, regex, 0, handler.into()));
         self
     }
 
-    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedHandler)>) -> Self {
+    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedService)>) -> Self {
         for route in routes {
             let (method_bits, regex, priority, handler) = route;
             let method = bits::Method::from_bits_truncate(method_bits);
@@ -272,7 +303,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
         handler: H
     ) -> Self
     where
-        H: Into<BoxedHandler> + 'static
+        H: Into<BoxedService> + 'static
     {
         self.path_handler_parts.push((method, regex, priority, handler.into()));
         self
@@ -331,12 +362,12 @@ struct PathHandlers {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
     priorities: Vec<u8>,
-    handlers: Vec<Arc<BoxedHandler>>
+    handlers: Vec<Arc<BoxedService>>
 }
 
 struct InnerRouter<S> {
     state: Option<Arc<S>>,
-    not_found: BoxedHandler,
+    not_found: BoxedService,
     handlers: MethodMap<Option<PathHandlers>>
 }
 
@@ -351,16 +382,59 @@ impl Router<()> {
     }
 }
 
-impl<S: 'static + Send + Sync> Handler for Router<S> {
+// impl<S: 'static + Send + Sync> Handler for Router<S> {
+//     fn handle(
+//         &self,
+//         request: Request<Body>
+//     ) -> Box<Future<Item = Response<Body>, Error = Never> + Send>
+//     {
+//         let mut request = request;
+
+//         if let Some(path_handlers) =
+//             self.0.handlers.get(request.method()).ok().and_then(|x| x.as_ref())
+//         {
+//             let priorities = &path_handlers.priorities;
+//             if let Some(i) = path_handlers
+//                 .regex_set
+//                 .matches(request.uri().path())
+//                 .iter()
+//                 .min_by(|x, y| priorities[*x].cmp(&priorities[*y]))
+//             {
+//                 let handler = &path_handlers.handlers[i];
+//                 let regex = &path_handlers.regexes[i];
+
+//                 {
+//                     let extensions_mut = request.extensions_mut();
+
+//                     if let Some(ref state) = self.0.state {
+//                         extensions_mut.insert(State(state.clone()));
+//                     }
+                    
+//                     extensions_mut.insert(MatchingRegex(regex.clone()));
+//                 }
+
+//                 return (handler.0).call(request);
+//             }
+//         }
+
+//         if let Some(ref state) = self.0.state {
+//             request.extensions_mut().insert(State(state.clone()));
+//         }
+        
+//         (((self.0).not_found).0).call(request)
+//     }
+// }
+
+impl<S: 'static + Send + Sync> Router<S> {
     fn handle(
-        &self,
+        &mut self,
         request: Request<Body>
     ) -> Box<Future<Item = Response<Body>, Error = Never> + Send>
     {
         let mut request = request;
 
         if let Some(path_handlers) =
-            self.0.handlers.get(request.method()).ok().and_then(|x| x.as_ref())
+            self.0.clone().handlers.get(request.method()).ok().and_then(|x| x.as_ref())
         {
             let priorities = &path_handlers.priorities;
             if let Some(i) = path_handlers
@@ -369,8 +443,8 @@ impl<S: 'static + Send + Sync> Handler for Router<S> {
                 .iter()
                 .min_by(|x, y| priorities[*x].cmp(&priorities[*y]))
             {
-                let handler = &path_handlers.handlers[i];
-                let regex = &path_handlers.regexes[i];
+                let handler = &mut path_handlers.handlers[i];
+                let regex = &mut path_handlers.regexes[i];
 
                 {
                     let extensions_mut = request.extensions_mut();
@@ -382,7 +456,7 @@ impl<S: 'static + Send + Sync> Handler for Router<S> {
                     extensions_mut.insert(MatchingRegex(regex.clone()));
                 }
 
-                return (handler.0).handle(request);
+                return (handler.0).call(request);
             }
         }
 
@@ -390,7 +464,7 @@ impl<S: 'static + Send + Sync> Handler for Router<S> {
             request.extensions_mut().insert(State(state.clone()));
         }
         
-        (((self.0).not_found).0).handle(request)
+        (((self.0).not_found).0).call(request)
     }
 }
 
