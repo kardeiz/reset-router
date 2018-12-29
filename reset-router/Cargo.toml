@@ -7,7 +7,7 @@ license = "MIT"
 name = "reset-router"
 readme = "../README.md"
 repository = "https://github.com/kardeiz/reset-router"
-version = "0.6.3"
+version = "0.6.4"
 
 [dependencies]
 bitflags = "1.0.4"

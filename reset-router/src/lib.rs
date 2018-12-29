@@ -142,13 +142,42 @@ impl std::error::Error for Never {
     fn description(&self) -> &str { match *self {} }
 }
 
-type Handler =
-    Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync;
+// type Handler =
+//     Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync;
 
-/// Container for the boxed handler functions
-pub struct BoxedHandler(Box<Handler>);
+// /// Container for the boxed handler functions
+// pub struct BoxedHandler(Box<Handler>);
 
-impl<H, I, S, E> From<H> for BoxedHandler
+// impl<H, I, S, E> From<H> for BoxedHandler
+// where
+//     I: IntoFuture<Item = S, Error = E>,
+//     I::Future: 'static + Send,
+//     S: Into<Response<Body>>,
+//     E: Into<Response<Body>>,
+//     H: Fn(Request<Body>) -> I + Sync + Send + 'static
+// {
+//     fn from(t: H) -> Self {
+//         BoxedHandler(Box::new(move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
+//             Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
+//         }))
+//     }
+// }
+
+pub trait Service: Send + Sync {
+    fn call(&self, req: Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send>;
+}
+
+pub struct ServiceFn<H>(H);
+
+impl<H> Service for ServiceFn<H> where H: Fn(Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> + Send + Sync {
+    fn call(&self, req: Request<Body>) -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
+        (&self.0)(req)
+    }
+}
+
+pub struct BoxedService(pub Box<Service>);
+
+impl<H, I, S, E> From<H> for BoxedService
 where
     I: IntoFuture<Item = S, Error = E>,
     I::Future: 'static + Send,
@@ -157,9 +186,9 @@ where
     H: Fn(Request<Body>) -> I + Sync + Send + 'static
 {
     fn from(t: H) -> Self {
-        BoxedHandler(Box::new(move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
+        BoxedService(Box::new(ServiceFn(move |request: Request<Body>| -> Box<Future<Item = Response<Body>, Error = Never> + Send> {
             Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
-        }))
+        })))
     }
 }
 
@@ -202,8 +231,8 @@ impl<T> MethodMap<T> {
 /// Builder for a `Router`
 pub struct RouterBuilder<'a, S> {
     state: Option<S>,
-    not_found: Option<BoxedHandler>,
-    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedHandler)>
+    not_found: Option<BoxedService>,
+    path_handler_parts: Vec<(bits::Method, &'a str, u8, BoxedService)>
 }
 
 impl<'a> RouterBuilder<'a, ()> {
@@ -223,19 +252,19 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
     }
 
     pub fn add_not_found<H>(mut self, handler: H) -> Self
-    where H: Into<BoxedHandler> + 'static {
+    where H: Into<BoxedService> + 'static {
         self.not_found = Some(handler.into());
         self
     }
 
     /// Add handler for method and regex. Priority is 0 by default.
     pub fn add<H>(mut self, method: bits::Method, regex: &'a str, handler: H) -> Self
-    where H: Into<BoxedHandler> + 'static {
+    where H: Into<BoxedService> + 'static {
         self.path_handler_parts.push((method, regex, 0, handler.into()));
         self
     }
 
-    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedHandler)>) -> Self {
+    pub fn add_routes(mut self, routes: Vec<(u32, &'a str, u8, BoxedService)>) -> Self {
         for route in routes {
             let (method_bits, regex, priority, handler) = route;
             let method = bits::Method::from_bits_truncate(method_bits);
@@ -254,7 +283,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
         handler: H
     ) -> Self
     where
-        H: Into<BoxedHandler> + 'static
+        H: Into<BoxedService> + 'static
     {
         self.path_handler_parts.push((method, regex, priority, handler.into()));
         self
@@ -313,12 +342,12 @@ struct PathHandlers {
     regex_set: RegexSet,
     regexes: Vec<Arc<Regex>>,
     priorities: Vec<u8>,
-    handlers: Vec<Arc<BoxedHandler>>
+    handlers: Vec<Arc<BoxedService>>
 }
 
 struct InnerRouter<S> {
     state: Option<Arc<S>>,
-    not_found: BoxedHandler,
+    not_found: BoxedService,
     handlers: MethodMap<Option<PathHandlers>>
 }
 
@@ -361,7 +390,7 @@ impl<S: 'static + Send + Sync> Router<S> {
                     extensions_mut.insert(MatchingRegex(regex.clone()));
                 }
 
-                return (handler.0)(request);
+                return (&handler.0).call(request);
             }
         }
 
@@ -369,7 +398,7 @@ impl<S: 'static + Send + Sync> Router<S> {
             request.extensions_mut().insert(State(state.clone()));
         }
 
-        (((self.0).not_found).0)(request)
+        (&(&self.0.not_found).0).call(request)
     }
 }
 

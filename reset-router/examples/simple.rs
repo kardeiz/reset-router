@@ -6,7 +6,9 @@ extern crate hyper;
 #[macro_use]
 extern crate reset_router;
 
-use hyper::rt::Future;
+// use hyper::rt::Future;
+
+use futures::Future;
 
 use reset_router::Router;
 
