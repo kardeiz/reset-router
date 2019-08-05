@@ -26,7 +26,7 @@ pub fn routes(item: TokenStream) -> TokenStream {
                 last_seg.value_mut().ident = Ident::new(
                     &format!(
                         "RESET_ROUTER_ROUTE_PARTS_FOR_{}",
-                        last_seg.value().ident.to_string().trim_left_matches("r#").to_owned()
+                        last_seg.value().ident.to_string().trim_start_matches("r#").to_owned()
                     ),
                     Span::call_site()
                 );
@@ -187,7 +187,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
     let fn_name = Ident::new(
         &format!(
             "RESET_ROUTER_ROUTE_PARTS_FOR_{}",
-            item.ident.to_string().trim_left_matches("r#").to_owned()
+            item.ident.to_string().trim_start_matches("r#").to_owned()
         ),
         Span::call_site()
     );

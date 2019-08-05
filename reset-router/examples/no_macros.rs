@@ -17,7 +17,7 @@ pub type Result<T> = std::result::Result<T, Response>;
 struct Hello(String);
 
 impl Service for Hello {
-    fn call(&self, req: Request) -> Box<Future<Item = Response, Error = Never> + Send> {
+    fn call(&self, _req: Request) -> Box<Future<Item = Response, Error = Never> + Send> {
         Box::new(Ok(Response::new(String::from(self.0.as_str()).into())).into_future())
     }
 }
