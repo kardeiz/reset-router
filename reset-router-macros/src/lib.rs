@@ -28,7 +28,7 @@ pub fn routes(item: TokenStream) -> TokenStream {
                         "RESET_ROUTER_ROUTE_PARTS_FOR_{}",
                         last_seg.value().ident.to_string().trim_start_matches("r#").to_owned()
                     ),
-                    Span::call_site()
+                    Span::call_site(),
                 );
             }
             let fn_name_path = &fn_name_path;
@@ -48,13 +48,17 @@ pub fn routes(item: TokenStream) -> TokenStream {
 ///
 /// Optionally include priority, e.g.: `#[options("/path", priority=1)]`
 #[proc_macro_attribute]
-pub fn options(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "OPTIONS") }
+pub fn options(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "OPTIONS")
+}
 
 /// Use like `#[get("/path")]`
 ///
 /// Optionally include priority, e.g.: `#[get("/path", priority=1)]`
 #[proc_macro_attribute]
-pub fn get(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "GET") }
+pub fn get(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "GET")
+}
 
 /// Use like `#[post("/path")]`
 ///
@@ -68,7 +72,9 @@ pub fn post(attrs: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Optionally include priority, e.g.: `#[put("/path", priority=1)]`
 #[proc_macro_attribute]
-pub fn put(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "PUT") }
+pub fn put(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "PUT")
+}
 
 /// Use like `#[delete("/path")]`
 ///
@@ -110,7 +116,6 @@ pub fn patch(attrs: TokenStream, item: TokenStream) -> TokenStream {
     named_route(attrs, item, "PATCH")
 }
 
-
 /// Use like `#[route(path="/path")]`
 ///
 /// Optionally include comma separated HTTP methods to match , e.g.: `#[route(path="/path", methods="GET, POST")]`
@@ -143,11 +148,11 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         .iter()
         .filter_map(|x| match x {
             NestedMeta::Meta(y) => Some(y),
-            _ => None
+            _ => None,
         })
         .filter_map(|x| match x {
             Meta::NameValue(y) => Some(y),
-            _ => None
+            _ => None,
         });
 
     let regex_str = params
@@ -155,7 +160,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         .find(|x| x.ident == "path")
         .and_then(|x| match x.lit {
             Lit::Str(ref y) => Some(y),
-            _ => None
+            _ => None,
         })
         .map(|x| x.value())
         .expect("No path provided");
@@ -165,7 +170,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         .find(|x| x.ident == "methods")
         .and_then(|x| match x.lit {
             Lit::Str(ref y) => Some(y),
-            _ => None
+            _ => None,
         })
         .map(|x| x.value())
         .unwrap_or_else(|| "".into());
@@ -175,7 +180,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         .find(|x| x.ident == "priority")
         .and_then(|x| match x.lit {
             Lit::Int(ref y) => Some(y),
-            _ => None
+            _ => None,
         })
         .map(|x| x.value() as u8)
         .unwrap_or_else(|| 0);
@@ -193,7 +198,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
             "trace" => quote!(reset_router::bits::Method::TRACE),
             "connect" => quote!(reset_router::bits::Method::CONNECT),
             "patch" => quote!(reset_router::bits::Method::PATCH),
-            _ => panic!("Unknown method parameter")
+            _ => panic!("Unknown method parameter"),
         };
 
         let first = method_iter.next();
@@ -206,7 +211,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
                     quote!(#acc | #val)
                 })
             }
-            _ => quote!(reset_router::bits::Method::all())
+            _ => quote!(reset_router::bits::Method::all()),
         }
     };
 
@@ -215,10 +220,10 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
             "RESET_ROUTER_ROUTE_PARTS_FOR_{}",
             item.ident.to_string().trim_start_matches("r#").to_owned()
         ),
-        Span::call_site()
+        Span::call_site(),
     );
 
-    let out = quote!{
+    let out = quote! {
         #item
         pub fn #fn_name() -> (u32, &'static str, u8) {
             ((#method_bits).bits(), #regex_str, #priority_int)

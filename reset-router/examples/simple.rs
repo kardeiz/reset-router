@@ -1,4 +1,3 @@
-extern crate failure;
 extern crate futures;
 extern crate http;
 extern crate hyper;
@@ -6,34 +5,28 @@ extern crate hyper;
 #[macro_use]
 extern crate reset_router;
 
-// use hyper::rt::Future;
-
 use futures::Future;
 
 use reset_router::Router;
 
 #[derive(Clone, Debug)]
 pub struct State {
-    pub goodbye: String
+    pub goodbye: String,
 }
 
 pub mod handlers {
 
-    pub type Request = http::Request<hyper::Body>;
-    pub type Response = http::Response<hyper::Body>;
-    pub type Result<T> = std::result::Result<T, Response>;
-
     use super::State;
-    use reset_router::RequestExtensions;
+    use reset_router::{Request, Response, RequestExtensions};
 
     #[route(path = "^/goodbye$", methods = "GET, POST")]
-    pub fn goodbye(req: Request) -> Result<Response> {
+    pub fn goodbye(req: Request) -> Result<Response, Response> {
         let state = req.state::<State>().unwrap();
         Ok(http::Response::builder().status(200).body(state.goodbye.clone().into()).unwrap())
     }
 
     #[get(r"^/hello/([^/]+)/(\d+)$")]
-    pub fn hello(req: Request) -> Result<Response> {
+    pub fn hello(req: Request) -> Result<Response, Response> {
         let (name, age) = req.parsed_captures::<(String, u8)>()?;
         Ok(::http::Response::builder()
             .status(200)
