@@ -1,31 +1,22 @@
-extern crate failure;
 extern crate futures;
 extern crate http;
 extern crate hyper;
 
-#[macro_use]
 extern crate reset_router;
 
 use futures::{Future, IntoFuture};
 
-use reset_router::{Router, BoxedService, Service, Never, bits::Method};
+use reset_router::{Router, Never, bits::Method};
 
 pub type Request = http::Request<hyper::Body>;
 pub type Response = http::Response<hyper::Body>;
 pub type Result<T> = std::result::Result<T, Response>;
 
-struct Hello(String);
-
-impl Service for Hello {
-    fn call(&self, _req: Request) -> Box<Future<Item = Response, Error = Never> + Send> {
-        Box::new(Ok(Response::new(String::from(self.0.as_str()).into())).into_future())
-    }
-}
-
 fn main() {
+
+
     let router = Router::build()
         .add(Method::GET, r"^/hello/?$", |_req| Ok::<_, Response>(Response::new("Hello".into())))
-        .add(Method::GET, r"^/hello/loud/?$", BoxedService(Box::new(Hello("HELLO".into()))))
         .finish()
         .unwrap();
 

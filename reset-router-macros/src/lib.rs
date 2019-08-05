@@ -44,6 +44,12 @@ pub fn routes(item: TokenStream) -> TokenStream {
     out.into()
 }
 
+/// Use like `#[options("/path")]`
+///
+/// Optionally include priority, e.g.: `#[options("/path", priority=1)]`
+#[proc_macro_attribute]
+pub fn options(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "OPTIONS") }
+
 /// Use like `#[get("/path")]`
 ///
 /// Optionally include priority, e.g.: `#[get("/path", priority=1)]`
@@ -64,12 +70,12 @@ pub fn post(attrs: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn put(attrs: TokenStream, item: TokenStream) -> TokenStream { named_route(attrs, item, "PUT") }
 
-/// Use like `#[patch("/path")]`
+/// Use like `#[delete("/path")]`
 ///
-/// Optionally include priority, e.g.: `#[patch("/path", priority=1)]`
+/// Optionally include priority, e.g.: `#[delete("/path", priority=1)]`
 #[proc_macro_attribute]
-pub fn patch(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    named_route(attrs, item, "PATCH")
+pub fn delete(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "DELETE")
 }
 
 /// Use like `#[head("/path")]`
@@ -80,13 +86,30 @@ pub fn head(attrs: TokenStream, item: TokenStream) -> TokenStream {
     named_route(attrs, item, "HEAD")
 }
 
-/// Use like `#[delete("/path")]`
+/// Use like `#[trace("/path")]`
 ///
-/// Optionally include priority, e.g.: `#[delete("/path", priority=1)]`
+/// Optionally include priority, e.g.: `#[trace("/path", priority=1)]`
 #[proc_macro_attribute]
-pub fn delete(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    named_route(attrs, item, "DELETE")
+pub fn trace(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "TRACE")
 }
+
+/// Use like `#[connect("/path")]`
+///
+/// Optionally include priority, e.g.: `#[connect("/path", priority=1)]`
+#[proc_macro_attribute]
+pub fn connect(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "CONNECT")
+}
+
+/// Use like `#[patch("/path")]`
+///
+/// Optionally include priority, e.g.: `#[patch("/path", priority=1)]`
+#[proc_macro_attribute]
+pub fn patch(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    named_route(attrs, item, "PATCH")
+}
+
 
 /// Use like `#[route(path="/path")]`
 ///
@@ -161,12 +184,15 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
         let mut method_iter = methods_str.split(',').map(|x| x.trim().to_lowercase());
 
         let cls = |s: &str| match s {
-            "get" => quote!(_reset_router::bits::Method::GET),
-            "post" => quote!(_reset_router::bits::Method::POST),
-            "put" => quote!(_reset_router::bits::Method::PUT),
-            "patch" => quote!(_reset_router::bits::Method::PATCH),
-            "head" => quote!(_reset_router::bits::Method::HEAD),
-            "delete" => quote!(_reset_router::bits::Method::DELETE),
+            "options" => quote!(reset_router::bits::Method::OPTIONS),
+            "get" => quote!(reset_router::bits::Method::GET),
+            "post" => quote!(reset_router::bits::Method::POST),
+            "put" => quote!(reset_router::bits::Method::PUT),
+            "delete" => quote!(reset_router::bits::Method::DELETE),
+            "head" => quote!(reset_router::bits::Method::HEAD),
+            "trace" => quote!(reset_router::bits::Method::TRACE),
+            "connect" => quote!(reset_router::bits::Method::CONNECT),
+            "patch" => quote!(reset_router::bits::Method::PATCH),
             _ => panic!("Unknown method parameter")
         };
 
@@ -180,7 +206,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
                     quote!(#acc | #val)
                 })
             }
-            _ => quote!(_reset_router::bits::Method::all())
+            _ => quote!(reset_router::bits::Method::all())
         }
     };
 
@@ -194,11 +220,7 @@ fn route_inner(attrs: AttributeArgs, item: TokenStream) -> TokenStream {
 
     let out = quote!{
         #item
-        #[allow(non_upper_case_globals, unused_attributes, unused_qualifications)]
         pub fn #fn_name() -> (u32, &'static str, u8) {
-            #[allow(unknown_lints)]
-            #[cfg_attr(feature = "cargo-clippy", allow(useless_attribute))]
-            extern crate reset_router as _reset_router;
             ((#method_bits).bits(), #regex_str, #priority_int)
         }
     };
