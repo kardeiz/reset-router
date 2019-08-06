@@ -1,3 +1,5 @@
+[![Docs](https://docs.rs/reset-router/badge.svg)](https://docs.rs/crate/reset-router/)
+
 # reset-router
 
 A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with async Hyper (0.12).
@@ -124,5 +126,7 @@ fn main() {
     hyper::rt::run(server);
 }
 ```
+
+Current version: 0.6.5
 
 License: MIT
