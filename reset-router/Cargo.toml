@@ -18,11 +18,11 @@ hyper = "0.12"
 proc-macro-hack = { version = "0.5.2", optional = true }
 regex = "1"
 
-[features]
-default = ["with-macros"]
-with-macros = ["reset-router-macros", "proc-macro-hack"]
-
 [dependencies.reset-router-macros]
 path = "../reset-router-macros"
 version = "0.6"
 optional = true
+
+[features]
+default = []
+with-macros = ["reset-router-macros", "proc-macro-hack"]

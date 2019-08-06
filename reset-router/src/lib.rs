@@ -1,17 +1,15 @@
 /*!
-# reset-router
+A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with async Hyper (0.12).
 
-A [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with async Hyper (0.12.x).
+Provides optional attribute based routing with `proc_macro_attribute`s. Enable the `with-macros` feature flag to use this feature.
 
-Provides optional attribute based routing with proc_macro_attributes. *Enable the `with-macros` feature flag to use this feature.*
-
-Your handler functions should have the type `H`, where
+Individual handler functions should have the type `H`, where
 ```rust
-    H: Fn(Request<Body>) -> I + Sync + Send + 'static,
+    H: Fn(http::Request<Body>) -> I + Sync + Send + 'static,
     I: IntoFuture<Item = S, Error = E>,
     I::Future: 'static + Send,
-    S: Into<Response<Body>>,
-    E: Into<Response<Body>>,
+    S: Into<http::Response<Body>>,
+    E: Into<http::Response<Body>>,
 ```
 
 You can return something as simple as `Ok(Response::new())`. You don't have to worry about futures
@@ -20,40 +18,44 @@ unless you need to read the request body or interact with other future-aware thi
 ## Usage:
 
 ```rust
+extern crate futures;
+extern crate http;
+extern crate hyper;
 
-// Use this custom bitflags instead of `http::Method` for easy `BitOr` style method combinations
-use reset_router::bits::Method;
+extern crate reset_router;
 
-fn hello(req: Request) -> Result<Response> {    
-    let (name, age) = req.parsed_captures::<(String, u8)>()?;
+use futures::{Future};
+
+use reset_router::{bits::Method, Request, Response, Router, RequestExtensions};
+
+#[derive(Clone)]
+pub struct State(pub i32);
+
+fn hello(req: Request) -> Result<Response, Response> {    
+    let (first_name, last_name) = req.parsed_captures::<(String, String)>()?;
     Ok(http::Response::builder()
         .status(200)
-        .body(format!("Hello, {} year old named {}!", age, name).into())
+        .body(format!("Hello, {} {}!", first_name, last_name).into())
         .unwrap())
 }
 
-let router = reset_router::Router::build()
-    .add(Method::GET | method::POST, r"^/hello/([^/]+)/(\d+)$", hello)
-    .finish()
-    .unwrap();
-```
+fn unreliable_add(req: Request) -> Result<Response, Response> {    
+    let (add1, add2) = req.parsed_captures::<(i32, i32)>()?;
 
-```rust
-use reset_router::RequestExtensions;
+    let state_num: i32 = req.state::<State>().map(|x| x.0 ).unwrap_or(0);
 
-// Example handler from Rocket
-#[get(r"^/hello/([^/]+)/(\d+)$")]
-pub fn hello(req: Request) -> Result<Response> {    
-    let (name, age) = req.parsed_captures::<(String, u8)>()?;
     Ok(http::Response::builder()
         .status(200)
-        .body(format!("Hello, {} year old named {}!", age, name).into())
+        .body(format!("{} + {} = {}\r\n", add1, add2, add1 + add2 + state_num).into())
         .unwrap())
 }
 
 fn main() {
-    let router = reset_router::Router::build()
-        .add_routes(routes![hello])
+
+    let router = Router::build()
+        .with_state(State(42))
+        .add(Method::GET | Method::POST, r"^/hello/([^/]+)/(.+)$", hello)
+        .add(http::Method::GET, r"^/add/([\d]+)/([\d]+)$", unreliable_add)
         .finish()
         .unwrap();
 
@@ -66,9 +68,61 @@ fn main() {
 }
 ```
 
-`RequestExtensions` provides easy access to your route regex captures, as well as access to an optional `State` object. 
-See [simple.rs](https://github.com/kardeiz/reset-router/blob/master/reset-router/examples/simple.rs) for an example.
+Or with attribute based routing:
 
+```rust
+extern crate futures;
+extern crate http;
+extern crate hyper;
+
+#[macro_use]
+extern crate reset_router;
+
+use futures::Future;
+
+use reset_router::Router;
+
+#[derive(Clone, Debug)]
+pub struct State {
+    pub goodbye: String,
+}
+
+pub mod handlers {
+
+    use super::State;
+    use reset_router::{Request, Response, RequestExtensions};
+
+    #[route(path = "^/goodbye$", methods = "GET, POST")]
+    pub fn goodbye(req: Request) -> Result<Response, Response> {
+        let state = req.state::<State>().unwrap();
+        Ok(http::Response::builder().status(200).body(state.goodbye.clone().into()).unwrap())
+    }
+
+    #[get(r"^/hello/([^/]+)/(\d+)$")]
+    pub fn hello(req: Request) -> Result<Response, Response> {
+        let (name, age) = req.parsed_captures::<(String, u8)>()?;
+        Ok(http::Response::builder()
+            .status(200)
+            .body(format!("Hello, {} year old named {}!", age, name).into())
+            .unwrap())
+    }
+}
+
+fn main() {
+    let router = Router::build()
+        .with_state(State { goodbye: "Goodbye".into() })
+        .add_routes(routes![handlers::hello, handlers::goodbye])
+        .finish()
+        .unwrap();
+
+    let addr = "0.0.0.0:3000".parse().unwrap();
+
+    let server =
+        hyper::Server::bind(&addr).serve(router).map_err(|e| eprintln!("server error: {}", e));
+
+    hyper::rt::run(server);
+}
+```
 */
 
 #[cfg(feature = "with-macros")]
@@ -81,13 +135,15 @@ use proc_macro_hack::proc_macro_hack;
 #[proc_macro_hack]
 pub use reset_router_macros::routes;
 
+
+/// Error handling
 pub mod err {
+    /// The error enum
     #[derive(Debug)]
     pub enum Error {
         Captures,
         MethodNotSupported,
         Http(http::Error),
-        Io(std::io::Error),
         Regex(regex::Error),
     }
 
@@ -97,7 +153,6 @@ pub mod err {
             match self {
                 Captures => "Could not parse captures".fmt(f),
                 MethodNotSupported => "Method not supported".fmt(f),
-                Io(ref inner) => inner.fmt(f),
                 Http(ref inner) => inner.fmt(f),
                 Regex(ref inner) => inner.fmt(f),
             }
@@ -108,7 +163,6 @@ pub mod err {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             use Error::*;
             match self {
-                Io(ref inner) => Some(inner),
                 Http(ref inner) => Some(inner),
                 Regex(ref inner) => Some(inner),
                 _ => None,
@@ -116,6 +170,7 @@ pub mod err {
         }
     }
 
+    /// Result wrapper: `Result<T, Error>`
     pub type Result<T> = std::result::Result<T, Error>;
 
     impl From<Error> for http::Response<hyper::Body> {
@@ -125,12 +180,13 @@ pub mod err {
     }
 }
 
+/// Contains `bits::Method` bitflags struct to enable `BitOr` style method folding
 pub mod bits {
 
     use bitflags::bitflags;
 
     bitflags! {
-        /// Flags for supported HTTP methods; allows easy `BitOr` style combinations
+        /// Flags for predefined HTTP methods
         pub struct Method: u32 {
             const OPTIONS = 1;
             const GET = 2;
@@ -146,7 +202,7 @@ pub mod bits {
 
     impl Method {
         pub(crate) fn matching_http_methods(&self) -> Vec<http::Method> {
-            let pairs = vec![
+            let pairs = &[
                 (Method::OPTIONS, http::Method::OPTIONS),
                 (Method::GET, http::Method::GET),
                 (Method::POST, http::Method::POST),
@@ -160,7 +216,7 @@ pub mod bits {
 
             pairs
                 .into_iter()
-                .flat_map(|(f, m)| if self.contains(f) { Some(m) } else { None })
+                .flat_map(|(f, m)| if self.contains(*f) { Some(m.clone()) } else { None })
                 .collect()
         }
     }
@@ -173,7 +229,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+/// Convenience wrapper for `http::Request<hyper::Body>`
 pub type Request = http::Request<hyper::Body>;
+
+/// Convenience wrapper for `http::Response<hyper::Body>`
 pub type Response = http::Response<hyper::Body>;
 
 /// Placeholder for unstable `!` type
@@ -205,6 +264,23 @@ impl Clone for BoxedHandler {
     }
 }
 
+struct FnWrapper<H>(H);
+
+impl<H, I, S, E> From<FnWrapper<H>> for BoxedHandler
+where
+    I: IntoFuture<Item = S, Error = E>,
+    I::Future: 'static + Send,
+    S: Into<Response>,
+    E: Into<Response>,
+    H: Fn(Request) -> I + Sync + Send + 'static,
+{
+    fn from(FnWrapper(t): FnWrapper<H>) -> Self {
+        BoxedHandler(Arc::new(move |request: Request| -> Box<Future<Item = Response, Error = Never> + Send> {
+            Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
+        }))
+    }
+}
+
 impl<H, I, S, E> From<H> for BoxedHandler
 where
     I: IntoFuture<Item = S, Error = E>,
@@ -213,52 +289,39 @@ where
     E: Into<Response>,
     H: Fn(Request) -> I + Sync + Send + 'static,
 {
-    fn from(t: H) -> Self {
-        BoxedHandler(Arc::new(move |request: Request| -> Box<Future<Item = Response, Error = Never> + Send> {
-            Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
-        }))
-    }
+    fn from(t: H) -> Self { FnWrapper(t).into() }
 }
 
+
 #[doc(hidden)]
-pub enum MethodKind<'a> {
+pub enum MethodKind {
     Bits(bits::Method),
-    Str(&'a str),
     Http(http::Method),
 }
 
-impl<'a> MethodKind<'a> {
+impl MethodKind {
     fn matching_http_methods(&self) -> err::Result<Vec<http::Method>> {
         match self {
             MethodKind::Bits(ref b) => Ok(b.matching_http_methods()),
-            MethodKind::Str(ref s) => {
-                Ok(vec![s.parse().map_err(http::Error::from).map_err(err::Error::Http)?])
-            }
             MethodKind::Http(ref m) => Ok(vec![m.clone()]),
         }
     }
 }
 
-impl<'a> From<&'a str> for MethodKind<'a> {
-    fn from(t: &'a str) -> Self {
-        MethodKind::Str(t)
-    }
-}
-
-impl<'a> From<bits::Method> for MethodKind<'a> {
+impl From<bits::Method> for MethodKind {
     fn from(t: bits::Method) -> Self {
         MethodKind::Bits(t)
     }
 }
 
-impl<'a> From<http::Method> for MethodKind<'a> {
+impl From<http::Method> for MethodKind {
     fn from(t: http::Method) -> Self {
         MethodKind::Http(t)
     }
 }
 
 struct RouteParts<'a> {
-    method: MethodKind<'a>,
+    method: MethodKind,
     regex: &'a str,
     priority: u8,
     handler: BoxedHandler,
@@ -278,6 +341,7 @@ impl<'a> RouterBuilder<'a, ()> {
 }
 
 impl<'a, S: 'static> RouterBuilder<'a, S> {
+    
     fn default_not_found(_: Request) -> Result<Response, Response> {
         Ok(http::Response::builder().status(404).body("Not Found".into()).unwrap())
     }
@@ -297,12 +361,11 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
 
     /// Add handler for method and regex. Priority is 0 by default.
     ///
-    /// Method can be a `&str`, `http::Method`, or a `bits::Method` flag
-
+    /// Method can be a `http::Method` or a `bits::Method` flag
     pub fn add<H, I>(self, method: I, regex: &'a str, handler: H) -> Self
     where
         H: Into<BoxedHandler> + 'static,
-        I: Into<MethodKind<'a>>,
+        I: Into<MethodKind>,
     {
         self.add_with_priority(method, regex, 0, handler)
     }
@@ -319,7 +382,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
 
     /// Add handler for method, regex, and priority. Lowest priority wins.
     ///
-    /// Method can be a `&str`, `http::Method`, or a `bits::Method` flag
+    /// Method can be a `http::Method` or a `bits::Method` flag
     pub fn add_with_priority<H, I>(
         mut self,
         method: I,
@@ -329,7 +392,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
     ) -> Self
     where
         H: Into<BoxedHandler> + 'static,
-        I: Into<MethodKind<'a>>,
+        I: Into<MethodKind>,
     {
         self.route_parts.push(RouteParts {
             method: method.into(),
@@ -357,7 +420,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
         let mut router = InnerRouter {
             state: self.state.map(Arc::new),
             not_found: self.not_found.unwrap_or_else(|| Self::default_not_found.into()),
-            handlers: HashMap::default(),
+            handlers: MethodMap::new(),
         };
 
         for (method, (paths, priorities, handlers)) in map {
@@ -369,7 +432,7 @@ impl<'a, S: 'static> RouterBuilder<'a, S> {
 
             let path_handlers = Handlers { regex_set, regexes, priorities, handlers };
 
-            router.handlers.insert(method, path_handlers);
+            router.handlers.set(method, path_handlers);
         }
 
         Ok(Router(Arc::new(router)))
@@ -383,13 +446,79 @@ struct Handlers {
     handlers: Vec<BoxedHandler>,
 }
 
+struct MethodMap<T> {
+    options: Option<T>,
+    get: Option<T>,
+    post: Option<T>,
+    put: Option<T>,
+    delete: Option<T>,
+    head: Option<T>,
+    trace: Option<T>,
+    connect: Option<T>,
+    patch: Option<T>,
+    extension: Option<HashMap<http::Method, T>>
+}
+
+impl<T> MethodMap<T> {
+    fn new() -> Self {
+        Self { 
+            options: None,
+            get: None,
+            post: None,
+            put: None,
+            delete: None,
+            head: None,
+            trace: None,
+            connect: None,
+            patch: None,
+            extension: None,
+        }
+    }
+
+    fn get(&self, method: &http::Method) -> Option<&T> {
+        match *method {
+            http::Method::OPTIONS => self.options.as_ref(),
+            http::Method::GET => self.get.as_ref(),
+            http::Method::POST => self.post.as_ref(),
+            http::Method::PUT => self.put.as_ref(),
+            http::Method::DELETE => self.delete.as_ref(),
+            http::Method::HEAD => self.head.as_ref(),
+            http::Method::TRACE => self.trace.as_ref(),
+            http::Method::CONNECT => self.connect.as_ref(),
+            http::Method::PATCH => self.patch.as_ref(),
+            ref m => self.extension.as_ref().and_then(|e| e.get(m))
+        }
+    }
+
+    fn set(&mut self, method: http::Method, t: T) {
+        match method {
+            http::Method::OPTIONS => { self.options = Some(t); }
+            http::Method::GET => { self.get = Some(t); }
+            http::Method::POST => { self.post = Some(t); }
+            http::Method::PUT => { self.put = Some(t); }
+            http::Method::DELETE => { self.delete = Some(t); }
+            http::Method::HEAD => { self.head = Some(t); }
+            http::Method::TRACE => { self.trace = Some(t); }
+            http::Method::CONNECT => { self.connect = Some(t); }
+            http::Method::PATCH => { self.patch = Some(t); }
+            m => { 
+                let mut extension = self.extension.take().unwrap_or_else(HashMap::new);
+                extension.insert(m, t);
+                self.extension = Some(extension);
+            }
+        }
+    }
+
+}
+
+
 struct InnerRouter<S> {
     state: Option<Arc<S>>,
     not_found: BoxedHandler,
-    handlers: HashMap<http::Method, Handlers>,
+    handlers: MethodMap<Handlers>,
 }
 
-/// The router impls `hyper::service::Service` and `hyper::service::MakeService`
+/// The router, impls `hyper::service::Service` and `hyper::service::MakeService`
 #[derive(Clone)]
 pub struct Router<S>(Arc<InnerRouter<S>>);
 
@@ -438,6 +567,31 @@ impl<S: 'static + Send + Sync> Router<S> {
         (&(&self.0.not_found).0)(request)
     }
 }
+
+impl<S: 'static + Send + Sync> hyper::service::Service for Router<S> {
+    type Error = Never;
+    type Future = Box<Future<Item = http::Response<Self::ResBody>, Error = Self::Error> + Send>;
+    type ReqBody = hyper::Body;
+    type ResBody = hyper::Body;
+
+    fn call(&mut self, req: http::Request<Self::ReqBody>) -> Self::Future {
+        self.inner_call(req)
+    }
+}
+
+impl<S: 'static + Send + Sync + Clone, Ctx> hyper::service::MakeService<Ctx> for Router<S> {
+    type Error = <Router<S> as hyper::service::Service>::Error;
+    type Future = futures::future::FutureResult<Router<S>, Never>;
+    type MakeError = Never;
+    type ReqBody = <Router<S> as hyper::service::Service>::ReqBody;
+    type ResBody = <Router<S> as hyper::service::Service>::ResBody;
+    type Service = Router<S>;
+
+    fn make_service(&mut self, _: Ctx) -> Self::Future {
+        futures::future::ok(self.clone())
+    }
+}
+
 
 struct State<S>(pub S);
 struct MatchingRegex(Arc<Regex>);
@@ -552,26 +706,3 @@ impl<U1: FromStr, U2: FromStr, U3: FromStr, U4: FromStr> ParsableCapture for (U1
     }
 }
 
-impl<S: 'static + Send + Sync> hyper::service::Service for Router<S> {
-    type Error = Never;
-    type Future = Box<Future<Item = http::Response<Self::ResBody>, Error = Self::Error> + Send>;
-    type ReqBody = hyper::Body;
-    type ResBody = hyper::Body;
-
-    fn call(&mut self, req: http::Request<Self::ReqBody>) -> Self::Future {
-        self.inner_call(req)
-    }
-}
-
-impl<S: 'static + Send + Sync + Clone, Ctx> hyper::service::MakeService<Ctx> for Router<S> {
-    type Error = <Router<S> as hyper::service::Service>::Error;
-    type Future = futures::future::FutureResult<Router<S>, Never>;
-    type MakeError = Never;
-    type ReqBody = <Router<S> as hyper::service::Service>::ReqBody;
-    type ResBody = <Router<S> as hyper::service::Service>::ResBody;
-    type Service = Router<S>;
-
-    fn make_service(&mut self, _: Ctx) -> Self::Future {
-        futures::future::ok(self.clone())
-    }
-}
