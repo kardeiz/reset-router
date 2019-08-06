@@ -4,14 +4,14 @@ extern crate hyper;
 
 extern crate reset_router;
 
-use futures::{Future};
+use futures::Future;
 
-use reset_router::{bits::Method, Request, Response, Router, RequestExtensions};
+use reset_router::{bits::Method, Request, RequestExtensions, Response, Router};
 
 #[derive(Clone)]
 pub struct State(pub i32);
 
-fn hello(req: Request) -> Result<Response, Response> {    
+fn hello(req: Request) -> Result<Response, Response> {
     let (first_name, last_name) = req.parsed_captures::<(String, String)>()?;
     Ok(http::Response::builder()
         .status(200)
@@ -19,10 +19,10 @@ fn hello(req: Request) -> Result<Response, Response> {
         .unwrap())
 }
 
-fn unreliable_add(req: Request) -> Result<Response, Response> {    
+fn unreliable_add(req: Request) -> Result<Response, Response> {
     let (add1, add2) = req.parsed_captures::<(i32, i32)>()?;
 
-    let state_num: i32 = req.state::<State>().map(|x| x.0 ).unwrap_or(0);
+    let state_num: i32 = req.state::<State>().map(|x| x.0).unwrap_or(0);
 
     Ok(http::Response::builder()
         .status(200)
@@ -31,7 +31,6 @@ fn unreliable_add(req: Request) -> Result<Response, Response> {
 }
 
 fn main() {
-
     let router = Router::build()
         .with_state(State(42))
         .add(Method::GET | Method::POST, r"^/hello/([^/]+)/(.+)$", hello)

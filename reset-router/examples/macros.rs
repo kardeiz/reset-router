@@ -17,7 +17,7 @@ pub struct State {
 pub mod handlers {
 
     use super::State;
-    use reset_router::{Request, Response, RequestExtensions};
+    use reset_router::{Request, RequestExtensions, Response};
 
     #[route(path = "^/goodbye$", methods = "GET, POST")]
     pub fn goodbye(req: Request) -> Result<Response, Response> {
