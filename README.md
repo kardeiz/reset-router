@@ -1,6 +1,7 @@
-[![Docs](https://docs.rs/reset-router/badge.svg)](https://docs.rs/crate/reset-router/)
-
 # reset-router
+
+[![Docs](https://docs.rs/reset-router/badge.svg)](https://docs.rs/crate/reset-router/)
+[![Crates.io](https://img.shields.io/crates/v/reset-router.svg)](https://crates.io/crates/reset-router)
 
 A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based router for use with async Hyper (0.12).
 
