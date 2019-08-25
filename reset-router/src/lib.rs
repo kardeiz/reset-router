@@ -609,37 +609,59 @@ impl<S: 'static + Send + Sync + Clone, Ctx> hyper::service::MakeService<Ctx> for
 struct State<S>(pub S);
 struct MatchingRegex(Arc<Regex>);
 
-/// Extensions to `http::Request` to support easy access to captures and `State` object
-pub trait RequestExtensions {
+/// Base extensions to `http::Request` and `http::request::Parts` to support access to captures
+pub trait RequestCaptureExtensions {
+    /// Any captures provided by the matching `Regex` for the current path
     fn captures(&self) -> Option<Captures>;
+}
+
+/// Extensions to `http::Request` and `http::request::Parts` to support easy access to captures and `State` object
+pub trait RequestExtensions : RequestCaptureExtensions {
+    /// Positional captures parsed into `FromStr` types, in tuple format
     fn parsed_captures<C: ParsableCapture>(&self) -> err::Result<C>;
+    /// Copy of any state passed into the router builder using `with_state`
     fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>>;
 }
 
-impl RequestExtensions for Request {
-    /// Any captures provided by the matching `Regex` for the current path
+impl RequestCaptureExtensions for Request {
     fn captures(&self) -> Option<Captures> {
         self.extensions().get::<MatchingRegex>().and_then(|r| r.0.captures(self.uri().path()))
     }
+}
 
-    /// Positional captures parsed into `FromStr` types, in tuple format
+impl RequestExtensions for Request {
     fn parsed_captures<C: ParsableCapture>(&self) -> err::Result<C> {
         Ok(C::from_request(self)?)
     }
 
-    /// Copy of any state passed into the router builder using `with_state`
     fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>> {
         self.extensions().get::<State<Arc<S>>>().as_ref().map(|x| x.0.clone())
     }
 }
 
+impl RequestCaptureExtensions for http::request::Parts {
+    fn captures(&self) -> Option<Captures> {
+        self.extensions.get::<MatchingRegex>().and_then(|r| r.0.captures(self.uri.path()))
+    }
+}
+
+impl RequestExtensions for http::request::Parts {
+    fn parsed_captures<C: ParsableCapture>(&self) -> err::Result<C> {
+        Ok(C::from_request(self)?)
+    }
+
+    fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>> {
+        self.extensions.get::<State<Arc<S>>>().as_ref().map(|x| x.0.clone())
+    }
+}
+
 /// Implemented for `T: FromStr` tups up to 4
 pub trait ParsableCapture: Sized {
-    fn from_request(req: &Request) -> err::Result<Self>;
+    fn from_request(req: &dyn RequestCaptureExtensions) -> err::Result<Self>;
 }
 
 impl<U: FromStr> ParsableCapture for (U,) {
-    fn from_request(req: &Request) -> err::Result<Self> {
+    fn from_request(req: &dyn RequestCaptureExtensions) -> err::Result<Self> {
         let captures = req.captures().ok_or(err::Error::Captures)?;
         let out_1 = captures
             .get(1)
@@ -651,7 +673,7 @@ impl<U: FromStr> ParsableCapture for (U,) {
 }
 
 impl<U1: FromStr, U2: FromStr> ParsableCapture for (U1, U2) {
-    fn from_request(req: &Request) -> err::Result<Self> {
+    fn from_request(req: &dyn RequestCaptureExtensions) -> err::Result<Self> {
         let captures = req.captures().ok_or(err::Error::Captures)?;
         let out_1 = captures
             .get(1)
@@ -668,7 +690,7 @@ impl<U1: FromStr, U2: FromStr> ParsableCapture for (U1, U2) {
 }
 
 impl<U1: FromStr, U2: FromStr, U3: FromStr> ParsableCapture for (U1, U2, U3) {
-    fn from_request(req: &Request) -> err::Result<Self> {
+    fn from_request(req: &dyn RequestCaptureExtensions) -> err::Result<Self> {
         let captures = req.captures().ok_or(err::Error::Captures)?;
         let out_1 = captures
             .get(1)
@@ -690,7 +712,7 @@ impl<U1: FromStr, U2: FromStr, U3: FromStr> ParsableCapture for (U1, U2, U3) {
 }
 
 impl<U1: FromStr, U2: FromStr, U3: FromStr, U4: FromStr> ParsableCapture for (U1, U2, U3, U4) {
-    fn from_request(req: &Request) -> err::Result<Self> {
+    fn from_request(req: &dyn RequestCaptureExtensions) -> err::Result<Self> {
         let captures = req.captures().ok_or(err::Error::Captures)?;
         let out_1 = captures
             .get(1)
