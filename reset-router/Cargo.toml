@@ -7,7 +7,7 @@ license = "MIT"
 name = "reset-router"
 readme = "../README.md"
 repository = "https://github.com/kardeiz/reset-router"
-version = "0.6.6"
+version = "0.7.0"
 edition = "2018"
 
 [dependencies]
@@ -16,14 +16,14 @@ futures = "0.1"
 http = "0.1"
 hyper = "0.12"
 proc-macro-hack = { version = "0.5.2", optional = true }
-regex = "1"
 
 [dependencies.reset-recognizer]
 path = "../reset-recognizer"
+version = "0.7"
 
 [dependencies.reset-router-macros]
 path = "../reset-router-macros"
-version = "0.6"
+version = "0.7"
 optional = true
 
 [features]

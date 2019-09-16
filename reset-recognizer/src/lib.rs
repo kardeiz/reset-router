@@ -1,6 +1,6 @@
-use regex::{CaptureLocations, Regex, RegexSet};
 use std::collections::HashMap;
 use std::str::FromStr;
+
 /// Error handling
 pub mod err {
     /// The error enum
@@ -36,14 +36,15 @@ pub mod err {
     pub type Result<T> = std::result::Result<T, Error>;
 }
 
+/// Captures data for matched Regex
 pub struct Captures {
     path: bytes::Bytes,
-    locs: Option<CaptureLocations>,
-    capture_names: CaptureNames,
+    locs: Option<regex::CaptureLocations>,
+    capture_names: Option<CaptureNames>,
 }
 
 impl Captures {
-    fn new(path: &str, regex: &Regex, capture_names: CaptureNames) -> Self {
+    fn new(path: &str, regex: &regex::Regex, capture_names: Option<CaptureNames>) -> Self {
         let locs = {
             let mut locs = regex.capture_locations();
             regex.captures_read(&mut locs, path).map(|_| locs)
@@ -52,14 +53,15 @@ impl Captures {
         Self { path: path.into(), locs, capture_names }
     }
 
+    /// Get named capture match
     pub fn name(&self, name: &str) -> Option<&str> {
         self.capture_names
-            .0
             .as_ref()
-            .and_then(|map| map.get(name.as_bytes()))
+            .and_then(|map| map.0.get(name.as_bytes()))
             .and_then(|i| self.get(*i))
     }
 
+    /// Get positional capture match
     pub fn get(&self, i: usize) -> Option<&str> {
         self.locs
             .as_ref()
@@ -67,10 +69,12 @@ impl Captures {
             .map(|(start, end)| std::str::from_utf8(&self.path[start..end]).unwrap())
     }
 
+    /// Parse positional captures into tuple
     pub fn parsed<C: FromCaptures>(&self) -> err::Result<C> {
         Ok(C::from_captures(&self)?)
     }
 
+    /// Iterate over all captures (including capture 0)   
     pub fn iter(&self) -> CapturesIter {
         let iter = self
             .locs
@@ -83,20 +87,9 @@ impl Captures {
 
         CapturesIter(iter, std::str::from_utf8(&self.path).unwrap())
     }
-
-    // pub fn captures(&self) -> Option<Captures> {
-    //     self.regex.captures(std::str::from_utf8(self.path.as_ref()).unwrap())
-    // }
-
-    // pub fn all_captures(&self) -> Vec<&str> {
-    //     self.captures().iter().flat_map(|x| x.iter() ).flatten().map(|x| x.as_str() ).collect()
-    // }
-
-    // pub fn parsed_captures<C: FromCaptures>(&self) -> err::Result<C> {
-    //     Ok(C::from_captures(self.captures())?)
-    // }
 }
 
+#[doc(hidden)]
 pub struct CapturesIter<'a>(std::vec::IntoIter<(usize, usize)>, &'a str);
 
 impl<'a> Iterator for CapturesIter<'a> {
@@ -107,6 +100,7 @@ impl<'a> Iterator for CapturesIter<'a> {
     }
 }
 
+/// Match data for a recognized route
 pub struct Match<'a, T> {
     pub handler: &'a T,
     pub captures: Captures,
@@ -126,14 +120,16 @@ pub struct RouterBuilder<T> {
 }
 
 impl<T> RouterBuilder<T> {
-    pub fn new() -> Self {
+    fn new() -> Self {
         RouterBuilder { parts: Vec::new() }
     }
 
+    /// Add a route with handler and default priority 0
     pub fn add<I: Into<String>>(self, regex: I, handler: T) -> Self {
         self.add_with_priority(regex, 0, handler)
     }
 
+    /// Add a route with handler and priority (lower is better)
     pub fn add_with_priority<I: Into<String>>(
         mut self,
         regex: I,
@@ -145,6 +141,7 @@ impl<T> RouterBuilder<T> {
         self
     }
 
+    /// Build finished router
     pub fn finish(self) -> err::Result<Router<T>> {
         let (regexes, priorities, handlers) = self.parts.into_iter().fold(
             (Vec::new(), Vec::new(), Vec::new()),
@@ -157,13 +154,13 @@ impl<T> RouterBuilder<T> {
             },
         );
 
-        let regex_set = RegexSet::new(regexes.iter()).map_err(err::Error::Regex)?;
+        let regex_set = regex::RegexSet::new(regexes.iter()).map_err(err::Error::Regex)?;
 
         let (capture_names, regexes) = regexes
             .iter()
             .map(|regex| {
-                Regex::new(regex)
-                    .map(|regex| (CaptureNames::new(&regex), regex))
+                regex::Regex::new(regex)
+                    .map(|regex| (CaptureNames::build(&regex), regex))
                     .map_err(err::Error::Regex)
             })
             .collect::<err::Result<Vec<_>>>()?
@@ -175,33 +172,39 @@ impl<T> RouterBuilder<T> {
 }
 
 #[derive(Clone)]
-struct CaptureNames(Option<HashMap<bytes::Bytes, usize>>);
+struct CaptureNames(HashMap<bytes::Bytes, usize>);
 
 impl CaptureNames {
-    fn new(regex: &Regex) -> Self {
+    fn build(regex: &regex::Regex) -> Option<Self> {
         let map = regex
             .capture_names()
             .enumerate()
             .filter_map(|(i, opt_name)| opt_name.map(|name| (bytes::Bytes::from(name), i)))
             .collect::<HashMap<_, _>>();
-        Self(if map.is_empty() { None } else { Some(map) })
+        if map.is_empty() {
+            None
+        } else {
+            Some(Self(map))
+        }
     }
 }
 
-#[derive(Clone)]
+///
 pub struct Router<T> {
-    regex_set: RegexSet,
-    regexes: Vec<Regex>,
-    capture_names: Vec<CaptureNames>,
+    regex_set: regex::RegexSet,
+    regexes: Vec<regex::Regex>,
+    capture_names: Vec<Option<CaptureNames>>,
     priorities: Vec<u8>,
     handlers: Vec<T>,
 }
 
 impl<T> Router<T> {
+    /// Build a new router
     pub fn build() -> RouterBuilder<T> {
         RouterBuilder::new()
     }
 
+    /// Match a route and return match data
     pub fn recognize<'a>(&'a self, path: &str) -> err::Result<Match<'a, T>> {
         if let Some(i) = self
             .regex_set
@@ -219,6 +222,7 @@ impl<T> Router<T> {
     }
 }
 
+/// Parse captures data
 pub trait FromCaptures: Sized {
     fn from_captures(caps: &Captures) -> err::Result<Self>;
 }

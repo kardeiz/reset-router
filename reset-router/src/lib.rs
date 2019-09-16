@@ -144,21 +144,19 @@ pub mod err {
     /// The error enum
     #[derive(Debug)]
     pub enum Error {
-        Captures,
+        CapturesMissing,
         MethodNotSupported,
         Http(http::Error),
-        Regex(regex::Error),
-        Recognizer(reset_recognizer::err::Error)
+        Recognizer(reset_recognizer::err::Error),
     }
 
     impl std::fmt::Display for Error {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             use Error::*;
             match self {
-                Captures => "Could not parse captures".fmt(f),
+                CapturesMissing => "Captures missing".fmt(f),
                 MethodNotSupported => "Method not supported".fmt(f),
                 Http(ref inner) => inner.fmt(f),
-                Regex(ref inner) => inner.fmt(f),
                 Recognizer(ref inner) => inner.fmt(f),
             }
         }
@@ -169,7 +167,6 @@ pub mod err {
             use Error::*;
             match self {
                 Http(ref inner) => Some(inner),
-                Regex(ref inner) => Some(inner),
                 Recognizer(ref inner) => Some(inner),
                 _ => None,
             }
@@ -230,9 +227,8 @@ pub mod bits {
 }
 
 use futures::{Future, IntoFuture};
-use regex::{Captures, Regex, RegexSet};
 use std::collections::HashMap;
-use std::str::FromStr;
+
 use std::sync::Arc;
 
 /// Convenience wrapper for `http::Request<hyper::Body>`
@@ -259,7 +255,7 @@ impl std::error::Error for Never {
 
 #[doc(hidden)]
 pub struct BoxedHandler(
-    Arc<Fn(Request) -> Box<Future<Item = Response, Error = Never> + Send> + Send + Sync>,
+    Arc<dyn Fn(Request) -> Box<dyn Future<Item = Response, Error = Never> + Send> + Send + Sync>,
 );
 
 impl Clone for BoxedHandler {
@@ -280,7 +276,7 @@ where
 {
     fn from(FnWrapper(t): FnWrapper<H>) -> Self {
         BoxedHandler(Arc::new(
-            move |request: Request| -> Box<Future<Item = Response, Error = Never> + Send> {
+            move |request: Request| -> Box<dyn Future<Item = Response, Error = Never> + Send> {
                 Box::new(t(request).into_future().map(|s| s.into()).or_else(|e| Ok(e.into())))
             },
         ))
@@ -308,10 +304,10 @@ pub enum MethodKind {
 }
 
 impl MethodKind {
-    fn matching_http_methods(&self) -> err::Result<Vec<http::Method>> {
+    fn matching_http_methods(&self) -> Vec<http::Method> {
         match self {
-            MethodKind::Bits(ref b) => Ok(b.matching_http_methods()),
-            MethodKind::Http(ref m) => Ok(vec![m.clone()]),
+            MethodKind::Bits(ref b) => b.matching_http_methods(),
+            MethodKind::Http(ref m) => vec![m.clone()],
         }
     }
 }
@@ -328,18 +324,11 @@ impl From<http::Method> for MethodKind {
     }
 }
 
-// struct RouteParts<'a> {
-//     method: MethodKind,
-//     regex: &'a str,
-//     priority: u8,
-//     handler: BoxedHandler,
-// }
-
 /// Builder for a `Router`
 pub struct RouterBuilder<S> {
     state: Option<S>,
     not_found: Option<BoxedHandler>,
-    inner: HashMap<MethodKind, recognizer::RouterBuilder<BoxedHandler>>,
+    inner: HashMap<http::Method, recognizer::RouterBuilder<BoxedHandler>>,
 }
 
 impl RouterBuilder<()> {
@@ -401,41 +390,34 @@ impl<S: 'static> RouterBuilder<S> {
         H: Into<BoxedHandler> + 'static,
         I: Into<MethodKind>,
     {
-        
-        let entry = self.inner.entry(method.into()).or_insert_with(recognizer::RouterBuilder::new);
-        let mut place = recognizer::RouterBuilder::new();
-        std::mem::swap(&mut place, entry);
-        place = place.add_with_priority(regex, priority, handler.into());
-        std::mem::swap(&mut place, entry);
+        let handler = handler.into();
+        for method in method.into().matching_http_methods() {
+            let entry = self
+                .inner
+                .remove(&method)
+                .unwrap_or_else(recognizer::Router::build)
+                .add_with_priority(regex, priority, handler.clone());
+            self.inner.insert(method, entry);
+        }
 
         self
     }
 
     /// Consumes the builder, returning the finished `Router`
     pub fn finish(self) -> err::Result<Router<S>> {
-
         let mut inner_router = InnerRouter {
             state: self.state.map(Arc::new),
             not_found: self.not_found.unwrap_or_else(|| Self::default_not_found.into()),
             routers: MethodMap::new(),
         };
 
-        for (method_kind, builder) in self.inner {
+        for (method, builder) in self.inner {
             let router = builder.finish().map_err(err::Error::Recognizer)?;
-            for method in method_kind.matching_http_methods()? {
-                inner_router.routers.set(method, router.clone());
-            }
+            inner_router.routers.set(method, router);
         }
 
-        Ok(Router(Arc::new(inner_router)))        
+        Ok(Router(Arc::new(inner_router)))
     }
-}
-
-struct Handlers {
-    regex_set: RegexSet,
-    regexes: Vec<Arc<Regex>>,
-    priorities: Vec<u8>,
-    handlers: Vec<BoxedHandler>,
 }
 
 struct MethodMap<T> {
@@ -537,7 +519,10 @@ impl Router<()> {
 }
 
 impl<S: 'static + Send + Sync> Router<S> {
-    fn inner_call(&self, request: Request) -> Box<Future<Item = Response, Error = Never> + Send> {
+    fn inner_call(
+        &self,
+        request: Request,
+    ) -> Box<dyn Future<Item = Response, Error = Never> + Send> {
         let mut request = request;
 
         if let Some(router) = self.0.routers.get(request.method()) {
@@ -549,10 +534,10 @@ impl<S: 'static + Send + Sync> Router<S> {
                         extensions_mut.insert(State(state.clone()));
                     }
 
-                    extensions_mut.insert(captures);
+                    extensions_mut.insert(Arc::new(captures));
 
                     return (&handler.0)(request);
-                },
+                }
                 _ => {}
             }
         }
@@ -567,7 +552,7 @@ impl<S: 'static + Send + Sync> Router<S> {
 
 impl<S: 'static + Send + Sync> hyper::service::Service for Router<S> {
     type Error = Never;
-    type Future = Box<Future<Item = http::Response<Self::ResBody>, Error = Self::Error> + Send>;
+    type Future = Box<dyn Future<Item = http::Response<Self::ResBody>, Error = Self::Error> + Send>;
     type ReqBody = hyper::Body;
     type ResBody = hyper::Body;
 
@@ -590,119 +575,36 @@ impl<S: 'static + Send + Sync + Clone, Ctx> hyper::service::MakeService<Ctx> for
 }
 
 struct State<S>(pub S);
-// struct MatchingRegex(Arc<Regex>);
 
-// /// Extensions to `http::Request` and `http::request::Parts` to support easy access to captures and `State` object
-// pub trait RequestExtensions {
-//     /// Any captures provided by the matching `Regex` for the current path
-//     fn captures(&self) -> Option<Captures>;
-//     /// Positional captures parsed into `FromStr` types, in tuple format
-//     fn parsed_captures<C: FromCaptures>(&self) -> err::Result<C> {
-//         Ok(C::from_captures(self.captures())?)
-//     }
-//     /// Copy of any state passed into the router builder using `with_state`
-//     fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>>;
-// }
+/// Extensions to `http::Request` and `http::request::Parts` to support easy access to captures and `State` object
+pub trait RequestExtensions {
+    /// Any captures provided by the matching `Regex` for the current path
+    fn captures(&self) -> Option<Arc<recognizer::Captures>>;
+    /// Positional captures parsed into `FromStr` types, in tuple format
+    fn parsed_captures<C: recognizer::FromCaptures>(&self) -> err::Result<C> {
+        let captures = self.captures().ok_or_else(|| err::Error::CapturesMissing)?;
+        Ok(C::from_captures(&*captures).map_err(err::Error::Recognizer)?)
+    }
+    /// Copy of any state passed into the router builder using `with_state`
+    fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>>;
+}
 
-// impl RequestExtensions for Request {
-//     fn captures(&self) -> Option<Captures> {
-//         self.extensions().get::<MatchingRegex>().and_then(|r| r.0.captures(self.uri().path()))
-//     }
+impl RequestExtensions for Request {
+    fn captures(&self) -> Option<Arc<recognizer::Captures>> {
+        self.extensions().get::<Arc<recognizer::Captures>>().as_ref().map(|x| Arc::clone(x))
+    }
 
-//     fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>> {
-//         self.extensions().get::<State<Arc<S>>>().as_ref().map(|x| x.0.clone())
-//     }
-// }
+    fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>> {
+        self.extensions().get::<State<Arc<S>>>().as_ref().map(|x| Arc::clone(&x.0))
+    }
+}
 
-// impl RequestExtensions for http::request::Parts {
-//     fn captures(&self) -> Option<Captures> {
-//         self.extensions.get::<MatchingRegex>().and_then(|r| r.0.captures(self.uri.path()))
-//     }
+impl RequestExtensions for http::request::Parts {
+    fn captures(&self) -> Option<Arc<recognizer::Captures>> {
+        self.extensions.get::<Arc<recognizer::Captures>>().as_ref().map(|x| Arc::clone(x))
+    }
 
-//     fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>> {
-//         self.extensions.get::<State<Arc<S>>>().as_ref().map(|x| x.0.clone())
-//     }
-// }
-
-// /// Implemented for `T: FromStr` tups up to 4
-// pub trait FromCaptures: Sized {
-//     fn from_captures(caps: Option<Captures>) -> err::Result<Self>;
-// }
-
-// impl<U: FromStr> FromCaptures for (U,) {
-//     fn from_captures(caps: Option<Captures>) -> err::Result<Self> {
-//         let captures = caps.ok_or(err::Error::Captures)?;
-//         let out_1 = captures
-//             .get(1)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         Ok((out_1,))
-//     }
-// }
-
-// impl<U1: FromStr, U2: FromStr> FromCaptures for (U1, U2) {
-//     fn from_captures(caps: Option<Captures>) -> err::Result<Self> {
-//         let captures = caps.ok_or(err::Error::Captures)?;
-//         let out_1 = captures
-//             .get(1)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         let out_2 = captures
-//             .get(2)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         Ok((out_1, out_2))
-//     }
-// }
-
-// impl<U1: FromStr, U2: FromStr, U3: FromStr> FromCaptures for (U1, U2, U3) {
-//     fn from_captures(caps: Option<Captures>) -> err::Result<Self> {
-//         let captures = caps.ok_or(err::Error::Captures)?;
-//         let out_1 = captures
-//             .get(1)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         let out_2 = captures
-//             .get(2)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         let out_3 = captures
-//             .get(3)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         Ok((out_1, out_2, out_3))
-//     }
-// }
-
-// impl<U1: FromStr, U2: FromStr, U3: FromStr, U4: FromStr> FromCaptures for (U1, U2, U3, U4) {
-//     fn from_captures(caps: Option<Captures>) -> err::Result<Self> {
-//         let captures = caps.ok_or(err::Error::Captures)?;
-//         let out_1 = captures
-//             .get(1)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         let out_2 = captures
-//             .get(2)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         let out_3 = captures
-//             .get(3)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         let out_4 = captures
-//             .get(4)
-//             .map(|x| x.as_str())
-//             .and_then(|x| x.parse().ok())
-//             .ok_or(err::Error::Captures)?;
-//         Ok((out_1, out_2, out_3, out_4))
-//     }
-// }
+    fn state<S: Send + Sync + 'static>(&self) -> Option<Arc<S>> {
+        self.extensions.get::<State<Arc<S>>>().as_ref().map(|x| Arc::clone(&x.0))
+    }
+}
