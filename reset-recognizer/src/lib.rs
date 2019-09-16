@@ -189,7 +189,7 @@ impl CaptureNames {
     }
 }
 
-///
+/// The complete route matcher
 pub struct Router<T> {
     regex_set: regex::RegexSet,
     regexes: Vec<regex::Regex>,
