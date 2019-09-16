@@ -18,6 +18,9 @@ hyper = "0.12"
 proc-macro-hack = { version = "0.5.2", optional = true }
 regex = "1"
 
+[dependencies.reset-recognizer]
+path = "../reset-recognizer"
+
 [dependencies.reset-router-macros]
 path = "../reset-router-macros"
 version = "0.6"

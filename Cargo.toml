@@ -1,2 +1,2 @@
 [workspace]
-members = ["reset-router", "reset-router-macros"]
+members = ["reset-recognizer", "reset-router", "reset-router-macros"]
