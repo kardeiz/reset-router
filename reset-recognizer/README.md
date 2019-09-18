@@ -11,7 +11,7 @@ A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) 
 ### Usage:
 
 ```rust
-let mut router = reset_recognizer::Router::build()
+let router = reset_recognizer::Router::build()
     .add(r"^/posts/(.+)/comments/(.+)$", "comment".to_string())
     .add(r"^/posts/(.+)/comments$", "comments".to_string())
     .add(r"^/posts/(.+)$", "post".to_string())
@@ -25,10 +25,9 @@ let matched = router.recognize("/posts/100/comments/200")?;
 
 let (post_id, comment_id) = matched.captures.parsed::<(i32, i32)>()?;
 
-println!("{:?}", &matched.handler, &post_id, &comment_id);
-
+println!("{:?}", (&matched.handler, &post_id, &comment_id));
 ```
 
-Current version: 0.7.1
+Current version: 0.7.2
 
 License: MIT
