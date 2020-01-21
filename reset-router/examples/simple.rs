@@ -1,17 +1,9 @@
-extern crate futures;
-extern crate http;
-extern crate hyper;
-
-extern crate reset_router;
-
-use futures::Future;
-
-use reset_router::{bits::Method, Request, RequestExtensions, Response, Router};
+use reset_router::{Request, RequestExtensions, Response, Router};
 
 #[derive(Clone)]
 pub struct State(pub i32);
 
-fn hello(req: Request) -> Result<Response, Response> {
+async fn hello(req: Request) -> Result<Response, Response> {
     let (first_name, last_name) = req.parsed_captures::<(String, String)>()?;
     Ok(http::Response::builder()
         .status(200)
@@ -19,10 +11,10 @@ fn hello(req: Request) -> Result<Response, Response> {
         .unwrap())
 }
 
-fn unreliable_add(req: Request) -> Result<Response, Response> {
+async fn unreliable_add(req: Request) -> Result<Response, Response> {
     let (add1, add2) = req.parsed_captures::<(i32, i32)>()?;
 
-    let state_num: i32 = req.state::<State>().map(|x| x.0).unwrap_or(0);
+    let state_num: i32 = req.data::<State>().map(|x| x.0).unwrap_or(0);
 
     Ok(http::Response::builder()
         .status(200)
@@ -30,18 +22,23 @@ fn unreliable_add(req: Request) -> Result<Response, Response> {
         .unwrap())
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let router = Router::build()
-        .with_state(State(42))
-        .add(Method::GET | Method::POST, r"^/hello/([^/]+)/(.+)$", hello)
+        .data(State(42))
+        .add(http::Method::POST, r"^/hello/([^/]+)/(.+)$", hello)
+        .add(http::Method::GET, r"^/hello/([^/]+)/(.+)$", hello)
         .add(http::Method::GET, r"^/add/([\d]+)/([\d]+)$", unreliable_add)
-        .finish()
-        .unwrap();
+        .add_not_found(|_| async {
+            Ok::<_, Response>(http::Response::builder().status(404).body("404".into()).unwrap())
+        })
+        .finish()?;
 
-    let addr = "0.0.0.0:3000".parse().unwrap();
+    let addr = "0.0.0.0:3000".parse()?;
 
-    let server =
-        hyper::Server::bind(&addr).serve(router).map_err(|e| eprintln!("server error: {}", e));
+    let server = hyper::Server::bind(&addr).serve(router);
 
-    hyper::rt::run(server);
+    server.await?;
+
+    Ok(())
 }

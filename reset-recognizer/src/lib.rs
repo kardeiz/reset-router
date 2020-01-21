@@ -2,7 +2,7 @@
 A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based path router, in the style of
 [route-recognizer](https://docs.rs/route-recognizer).
 
-[reset-router](https://docs.rs/reset-router), a higher level path router for use with Hyper 0.12, uses this library internally.
+[reset-router](https://docs.rs/reset-router), a higher level path router for use with Hyper 0.13, uses this library internally.
 
 ## Usage:
 
@@ -65,14 +65,14 @@ pub mod err {
 
 /// Captures data for matched Regex
 pub struct Captures {
-    path: String,
+    path: Box<str>,
     locs: Option<regex::CaptureLocations>,
     capture_names: Option<CaptureNames>,
 }
 
 impl Captures {
     fn new(
-        path: String,
+        path: Box<str>,
         regex: &regex::Regex,
         mut locs: regex::CaptureLocations,
         capture_names: Option<CaptureNames>,
@@ -88,13 +88,11 @@ impl Captures {
     }
 
     /// Get positional capture match
-    ///
-    /// Uses `unsafe`, but should be safe: the string is not changed between `Regex::captures_read` and this call.
     pub fn get(&self, i: usize) -> Option<&str> {
         self.locs
             .as_ref()
             .and_then(|loc| loc.get(i))
-            .map(|(start, end)| unsafe { self.path.get_unchecked(start..end) })
+            .and_then(|(start, end)| self.path.get(start..end) )
     }
 
     /// Parse positional captures into tuple
@@ -109,23 +107,20 @@ impl Captures {
             .as_ref()
             .map(|locs| (0..locs.len()).into_iter().filter_map(move |i| locs.get(i)))
             .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .into_iter();
+            .flatten();
 
-        CapturesIter(iter, &self.path)
+        CapturesIter(Box::new(iter), &self.path)
     }
 }
 
 #[doc(hidden)]
-pub struct CapturesIter<'a>(std::vec::IntoIter<(usize, usize)>, &'a str);
+pub struct CapturesIter<'a>(Box<dyn Iterator<Item=(usize, usize)> + 'a>, &'a str);
 
 impl<'a> Iterator for CapturesIter<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<&'a str> {
-        // As above, this should be safe since we are not changing the path string at any point
-        self.0.next().map(|(start, end)| unsafe { self.1.get_unchecked(start..end) })
+        self.0.next().and_then(|(start, end)| self.1.get(start..end) )
     }
 }
 
@@ -138,7 +133,7 @@ pub struct Match<'a, T> {
 #[derive(Debug)]
 struct RouteParts<T> {
     regex: String,
-    priority: u8,
+    priority: i8,
     handler: T,
 }
 
@@ -146,16 +141,12 @@ struct RouteParts<T> {
 #[derive(Default)]
 pub struct RouterBuilder<T> {
     parts: Vec<RouteParts<T>>,
-    regex_set_options_configurator: Option<Box<dyn Fn(&mut regex::RegexSetBuilder)>>,
-    regex_options_configurator: Option<Box<dyn Fn(&mut regex::RegexBuilder)>>,
 }
 
 impl<T> RouterBuilder<T> {
     fn new() -> Self {
         RouterBuilder {
             parts: Vec::new(),
-            regex_set_options_configurator: None,
-            regex_options_configurator: None,
         }
     }
 
@@ -164,33 +155,15 @@ impl<T> RouterBuilder<T> {
         self.add_with_priority(regex, 0, handler)
     }
 
-    /// Add a route with handler and priority (lower is better)
+    /// Add a route with handler and priority (higher is better)
     pub fn add_with_priority<I: Into<String>>(
         mut self,
         regex: I,
-        priority: u8,
+        priority: i8,
         handler: T,
     ) -> Self {
         self.parts.push(RouteParts { regex: regex.into(), priority, handler });
 
-        self
-    }
-
-    /// If you need to make any changes to `regex::RegexSetBuilder`
-    pub fn configure_regex_set_builder<F: Fn(&mut regex::RegexSetBuilder) + 'static>(
-        mut self,
-        f: F,
-    ) -> Self {
-        self.regex_set_options_configurator = Some(Box::new(f));
-        self
-    }
-
-    /// If you need to make any changes to `regex::RegexBuilder`
-    pub fn configure_regex_builder<F: Fn(&mut regex::RegexBuilder) + 'static>(
-        mut self,
-        f: F,
-    ) -> Self {
-        self.regex_options_configurator = Some(Box::new(f));
         self
     }
 
@@ -207,26 +180,14 @@ impl<T> RouterBuilder<T> {
             },
         );
 
-        let regex_set = {
-            let mut builder = regex::RegexSetBuilder::new(regex_strs.iter());
-            if let Some(regex_set_options_configurator) = self.regex_set_options_configurator {
-                regex_set_options_configurator(&mut builder);
-            }
-            builder.build().map_err(err::Error::Regex)?
-        };
+        let regex_set = regex::RegexSet::new(regex_strs.iter()).map_err(err::Error::Regex)?;
 
         let mut regexes = Vec::new();
         let mut capture_names = Vec::new();
         let mut capture_locations = Vec::new();
 
         for regex_str in regex_strs.iter() {
-            let regex = {
-                let mut builder = regex::RegexBuilder::new(regex_str);
-                if let Some(ref regex_options_configurator) = self.regex_options_configurator {
-                    regex_options_configurator(&mut builder);
-                }
-                builder.build().map_err(err::Error::Regex)?
-            };
+            let regex = regex::Regex::new(regex_str).map_err(err::Error::Regex)?;
             capture_names.push(CaptureNames::build(&regex));
             capture_locations.push(regex.capture_locations());
             regexes.push(regex);
@@ -260,7 +221,7 @@ pub struct Router<T> {
     regexes: Vec<regex::Regex>,
     capture_locations: Vec<regex::CaptureLocations>,
     capture_names: Vec<Option<CaptureNames>>,
-    priorities: Vec<u8>,
+    priorities: Vec<i8>,
     handlers: Vec<T>,
 }
 
@@ -271,13 +232,12 @@ impl<T> Router<T> {
     }
 
     /// Match a route and return match data
-    pub fn recognize<'a, I: Into<String>>(&'a self, path: I) -> err::Result<Match<'a, T>> {
-        let path = path.into();
+    pub fn recognize<'a>(&'a self, path: &str) -> err::Result<Match<'a, T>> {
         if let Some(i) = self
             .regex_set
-            .matches(&path)
+            .matches(path)
             .iter()
-            .min_by(|x, y| self.priorities[*x].cmp(&self.priorities[*y]))
+            .max_by(|x, y| self.priorities[*x].cmp(&self.priorities[*y]))
         {
             let handler = &self.handlers[i];
             let regex = &self.regexes[i];
@@ -286,14 +246,14 @@ impl<T> Router<T> {
             Ok(Match {
                 handler,
                 captures: Captures::new(
-                    path,
+                    path.into(),
                     regex,
                     capture_locations.clone(),
                     capture_names.clone(),
                 ),
             })
         } else {
-            Err(err::Error::Unmatched(path))
+            Err(err::Error::Unmatched(String::from(path)))
         }
     }
 }

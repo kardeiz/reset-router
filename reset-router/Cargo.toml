@@ -7,25 +7,19 @@ license = "MIT"
 name = "reset-router"
 readme = "../README.md"
 repository = "https://github.com/kardeiz/reset-router"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2018"
 
 [dependencies]
-bitflags = "1"
-futures = "0.1"
-http = "0.1"
-hyper = "0.12"
-proc-macro-hack = { version = "0.5.2", optional = true }
+futures = "0.3"
+http = "0.2"
+hyper = "0.13"
+type-map = "0.2.0"
+tower = "0.3.0"
 
 [dependencies.reset-recognizer]
 path = "../reset-recognizer"
-version = "0.7"
+version = "0.8"
 
-[dependencies.reset-router-macros]
-path = "../reset-router-macros"
-version = "0.7"
-optional = true
-
-[features]
-default = []
-with-macros = ["reset-router-macros", "proc-macro-hack"]
+[dev-dependencies]
+tokio = { version = "0.2", features = ["full"] }

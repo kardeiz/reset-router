@@ -6,7 +6,7 @@
 A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) based path router, in the style of
 [route-recognizer](https://docs.rs/route-recognizer).
 
-[reset-router](https://docs.rs/reset-router), a higher level path router for use with Hyper 0.12, uses this library internally.
+[reset-router](https://docs.rs/reset-router), a higher level path router for use with Hyper 0.13, uses this library internally.
 
 ### Usage:
 
@@ -28,6 +28,6 @@ let (post_id, comment_id) = matched.captures.parsed::<(i32, i32)>()?;
 println!("{:?}", (&matched.handler, &post_id, &comment_id));
 ```
 
-Current version: 0.7.2
+Current version: 0.8.0
 
 License: MIT
