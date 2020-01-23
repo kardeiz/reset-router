@@ -464,15 +464,14 @@ impl tower::Service<Request> for Router {
         std::task::Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
-        let mut req = req;
+    fn call(&mut self, mut request: Request) -> Self::Future {
 
         let service = Arc::clone(&self.0);
 
-        if let Some(router) = service.routers.get(req.method()) {
-            if let Ok(recognizer::Match { handler, captures }) = router.recognize(req.uri().path())
+        if let Some(router) = service.routers.get(request.method()) {
+            if let Ok(recognizer::Match { handler, captures }) = router.recognize(request.uri().path())
             {
-                let extensions_mut = req.extensions_mut();
+                let extensions_mut = request.extensions_mut();
 
                 if let Some(ref data) = self.0.data {
                     extensions_mut.insert(data.clone());
@@ -480,15 +479,15 @@ impl tower::Service<Request> for Router {
 
                 extensions_mut.insert(Arc::new(captures));
 
-                return handler.0(req);
+                return handler.0(request);
             }
         }
 
         if let Some(ref data) = self.0.data {
-            req.extensions_mut().insert(data.clone());
+            request.extensions_mut().insert(data.clone());
         }
 
-        service.not_found.0(req)
+        service.not_found.0(request)
     }
 }
 

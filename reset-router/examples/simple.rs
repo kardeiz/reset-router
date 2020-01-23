@@ -8,7 +8,7 @@ impl SharedService for Handler {
     type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
     type Future = futures::future::Ready<Result<Self::Response, Self::Error>>;
 
-    fn call(&self, request: Request) -> Self::Future {
+    fn call(&self, _: Request) -> Self::Future {
         let inner = Arc::clone(&self.0);
         futures::future::ready(Ok(http::Response::builder()
             .status(200)
