@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "reset-router"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "futures 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "http 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
