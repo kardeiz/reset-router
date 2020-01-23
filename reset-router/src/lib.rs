@@ -465,11 +465,11 @@ impl tower::Service<Request> for Router {
     }
 
     fn call(&mut self, mut request: Request) -> Self::Future {
-
         let service = Arc::clone(&self.0);
 
         if let Some(router) = service.routers.get(request.method()) {
-            if let Ok(recognizer::Match { handler, captures }) = router.recognize(request.uri().path())
+            if let Ok(recognizer::Match { handler, captures }) =
+                router.recognize(request.uri().path())
             {
                 let extensions_mut = request.extensions_mut();
 
@@ -477,7 +477,7 @@ impl tower::Service<Request> for Router {
                     extensions_mut.insert(data.clone());
                 }
 
-                extensions_mut.insert(Arc::new(captures));
+                extensions_mut.insert(captures);
 
                 return handler.0(request);
             }
@@ -508,7 +508,7 @@ impl<'a> tower::Service<&'a hyper::server::conn::AddrStream> for Router {
 /// Extensions to `http::Request` and `http::request::Parts` to support easy access to captures and `State` object
 pub trait RequestExtensions {
     /// Any captures provided by the matching `Regex` for the current path
-    fn captures(&self) -> Option<Arc<recognizer::Captures>>;
+    fn captures(&self) -> Option<&recognizer::Captures>;
     /// Positional captures parsed into `FromStr` types, in tuple format
     fn parsed_captures<C: recognizer::FromCaptures>(&self) -> err::Result<C> {
         let captures = self.captures().ok_or_else(|| err::Error::CapturesMissing)?;
@@ -519,8 +519,8 @@ pub trait RequestExtensions {
 }
 
 impl RequestExtensions for Request {
-    fn captures(&self) -> Option<Arc<recognizer::Captures>> {
-        self.extensions().get::<Arc<recognizer::Captures>>().as_ref().map(|x| Arc::clone(x))
+    fn captures(&self) -> Option<&recognizer::Captures> {
+        self.extensions().get::<recognizer::Captures>()
     }
 
     fn data<T: Send + Sync + 'static>(&self) -> Option<Data<T>> {
@@ -529,8 +529,8 @@ impl RequestExtensions for Request {
 }
 
 impl RequestExtensions for http::request::Parts {
-    fn captures(&self) -> Option<Arc<recognizer::Captures>> {
-        self.extensions.get::<Arc<recognizer::Captures>>().as_ref().map(|x| Arc::clone(x))
+    fn captures(&self) -> Option<&recognizer::Captures> {
+        self.extensions.get::<recognizer::Captures>()
     }
 
     fn data<T: Send + Sync + 'static>(&self) -> Option<Data<T>> {
