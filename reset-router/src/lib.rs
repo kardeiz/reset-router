@@ -3,10 +3,10 @@ A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) 
 
 Individual handler functions should have the type `H`, where
 ```rust
-    H: Fn(Request) -> F + Sync + Send + 'static,
-    F: Future<Output = Result<S, E>> + Send + 'static,
+    H: Fn(Request) -> F,
+    F: Future<Output = Result<S, E>> + Send,
     S: Into<Response>,
-    E: Into<Response>
+    E: Into<Response>,
 ```
 
 You can return something as simple as `Ok(Response::new("hello world".into()))`. You don't have to worry about futures
@@ -15,7 +15,24 @@ unless you need to read the request body or interact with other future-aware thi
 ## Usage:
 
 ```rust
-use reset_router::{Request, RequestExtensions, Response, Router};
+use reset_router::{Request, RequestExtensions, Response, Router, SharedService};
+use std::sync::Arc;
+
+pub struct Handler(Arc<String>);
+
+impl SharedService for Handler {
+    type Response = Response;
+    type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+    type Future = futures::future::Ready<Result<Self::Response, Self::Error>>;
+
+    fn call(&self, request: Request) -> Self::Future {
+        let inner = Arc::clone(&self.0);
+        futures::future::ready(Ok(http::Response::builder()
+            .status(200)
+            .body(format!("Hello, {}!", inner).into())
+            .unwrap()))
+    }
+}
 
 #[derive(Clone)]
 pub struct State(pub i32);
@@ -28,14 +45,16 @@ async fn hello(req: Request) -> Result<Response, Response> {
         .unwrap())
 }
 
-async fn unreliable_add(req: Request) -> Result<Response, Response> {
+async fn add(req: Request) -> Result<Response, Response> {
     let (add1, add2) = req.parsed_captures::<(i32, i32)>()?;
 
     let state_num: i32 = req.data::<State>().map(|x| x.0).unwrap_or(0);
 
     Ok(http::Response::builder()
         .status(200)
-        .body(format!("{} + {} = {}\r\n", add1, add2, add1 + add2 + state_num).into())
+        .body(
+            format!("{} + {} + {} = {}\r\n", add1, add2, state_num, add1 + add2 + state_num).into(),
+        )
         .unwrap())
 }
 
@@ -45,7 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .data(State(42))
         .add(http::Method::POST, r"^/hello/([^/]+)/(.+)$", hello)
         .add(http::Method::GET, r"^/hello/([^/]+)/(.+)$", hello)
-        .add(http::Method::GET, r"^/add/([\d]+)/([\d]+)$", unreliable_add)
+        .add(http::Method::GET, r"^/add/([\d]+)/([\d]+)$", add)
+        .add(http::Method::GET, r"^/other$", Handler(Arc::new(String::from("world"))))
+        .add_not_found(|_| {
+            async {
+                Ok::<_, Response>(http::Response::builder().status(404).body("404".into()).unwrap())
+            }
+        })
         .finish()?;
 
     let addr = "0.0.0.0:3000".parse()?;
@@ -58,8 +83,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 */
-
-use reset_recognizer as recognizer;
 
 /// Error handling
 pub mod err {
@@ -105,13 +128,18 @@ pub mod err {
     }
 }
 
-// use futures::{Future, IntoFuture};
+use reset_recognizer as recognizer;
+
 use std::collections::HashMap;
 
-use std::sync::Arc;
 use std::pin::Pin;
+use std::sync::Arc;
 
-use futures::{Future, FutureExt};
+use futures::{
+    future::{ready, Ready},
+    ready, Future, FutureExt, TryFuture,
+};
+use std::task::{Context, Poll};
 
 /// Convenience wrapper for `http::Request<hyper::Body>`
 pub type Request = http::Request<hyper::Body>;
@@ -205,7 +233,6 @@ impl<T> MethodMap<T> {
 pub struct Data<T>(Arc<T>);
 
 impl<T> Data<T> {
-
     /// Create a new `data` container
     pub fn new(t: T) -> Self {
         Data(Arc::new(t))
@@ -215,7 +242,6 @@ impl<T> Data<T> {
     pub fn from_arc(arc: Arc<T>) -> Self {
         Data(arc)
     }
-
 }
 
 impl<T> std::ops::Deref for Data<T> {
@@ -232,35 +258,87 @@ impl<T> Clone for Data<T> {
     }
 }
 
-#[doc(hidden)]
-pub struct BoxedServiceFn(
-    Arc<
-        dyn Fn(Request) -> Pin<
-            Box<
-                dyn Future<Output = Result<Response, Box<dyn std::error::Error + Send + Sync + 'static>>> + Send
-            >
-        > + Send + Sync
-    >
-);
+/// Shared trait for route handlers. Similar to `tower::Service`, but takes `&self`.
+///
+/// Implemented for `H` where
+/// ```
+/// H: Fn(Request) -> F,
+/// F: Future<Output = Result<S, E>> + Send,
+/// S: Into<Response>,
+/// E: Into<Response>,
+/// ```
+pub trait SharedService {
+    type Response: Into<Response>;
+    type Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>;
+    type Future: Future<Output = Result<Self::Response, Self::Error>> + Send;
 
-impl<H, F, S, E> From<H> for BoxedServiceFn
+    fn call(&self, request: Request) -> Self::Future;
+}
+
+#[pin_project::pin_project]
+pub struct HandlerFuture<F> {
+    #[pin]
+    inner: F,
+}
+
+impl<F, S, E> Future for HandlerFuture<F>
 where
-    F: Future<Output = Result<S, E>> + Send + 'static,
+    F: Future<Output = Result<S, E>> + Send,
     S: Into<Response>,
     E: Into<Response>,
-    H: Fn(Request) -> F + Sync + Send + 'static,
 {
-    fn from(t: H) -> Self {
-        Self(Arc::new(
-            move |req: Request| {
-                let rt = t(req).map(|res| res.map(|s| s.into()).or_else(|e| Ok(e.into())));
-                Box::pin(rt) as Pin<
-                    Box<
-                        dyn Future<Output = Result<Response, Box<dyn std::error::Error + Send + Sync + 'static>>> + Send
-                    >
-                >
-            }
-        ))
+    type Output = Result<Response, Box<dyn std::error::Error + Send + Sync + 'static>>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let out = match ready!(self.project().inner.try_poll(cx)) {
+            Ok(res) => Ok(res.into()),
+            Err(err) => Ok(err.into()),
+        };
+        Poll::Ready(out)
+    }
+}
+
+impl<H, F, S, E> SharedService for H
+where
+    F: Future<Output = Result<S, E>> + Send,
+    S: Into<Response>,
+    E: Into<Response>,
+    H: Fn(Request) -> F,
+{
+    type Response = Response;
+    type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+    type Future = HandlerFuture<F>;
+
+    fn call(&self, request: Request) -> Self::Future {
+        HandlerFuture { inner: self(request) }
+    }
+}
+
+struct BoxedSharedService(
+    Arc<
+        dyn Fn(
+                Request,
+            ) -> Pin<
+                Box<
+                    dyn Future<
+                            Output = Result<
+                                Response,
+                                Box<dyn std::error::Error + Send + Sync + 'static>,
+                            >,
+                        > + Send,
+                >,
+            > + Send
+            + Sync,
+    >,
+);
+
+impl BoxedSharedService {
+    fn new<T: SharedService + Send + Sync + 'static>(t: T) -> Self {
+        Self(Arc::new(move |req: Request| {
+            let rt = t.call(req).map(|res| res.map(|s| s.into()).map_err(|e| e.into()));
+            Box::pin(rt)
+        }))
     }
 }
 
@@ -269,8 +347,8 @@ struct DataMap(Data<type_map::concurrent::TypeMap>);
 
 struct InnerRouter {
     data: Option<DataMap>,
-    not_found: BoxedServiceFn,
-    routers: MethodMap<recognizer::Router<BoxedServiceFn>>,
+    not_found: BoxedSharedService,
+    routers: MethodMap<recognizer::Router<BoxedSharedService>>,
 }
 
 /// The router, impls `hyper::service::Service` and the equivalent of `MakeService`
@@ -278,7 +356,6 @@ struct InnerRouter {
 pub struct Router(Arc<InnerRouter>);
 
 impl Router {
-
     /// Create a new `RouterBuilder`
     pub fn build() -> RouterBuilder {
         RouterBuilder::new()
@@ -288,8 +365,8 @@ impl Router {
 /// Builder for a `Router`
 pub struct RouterBuilder {
     data: Option<type_map::concurrent::TypeMap>,
-    not_found: Option<BoxedServiceFn>,
-    inner: HashMap<http::Method, recognizer::RouterBuilder<BoxedServiceFn>>,
+    not_found: Option<BoxedSharedService>,
+    inner: HashMap<http::Method, recognizer::RouterBuilder<BoxedSharedService>>,
 }
 
 impl RouterBuilder {
@@ -299,20 +376,17 @@ impl RouterBuilder {
 }
 
 impl RouterBuilder {
-    
-    fn default_not_found(_: Request) -> impl Future<Output=Result<Response, Response>> {
-        async {
-            Ok(http::Response::builder().status(404).body("Not Found".into()).unwrap())
-        }
+    fn default_not_found(_: Request) -> impl Future<Output = Result<Response, Response>> {
+        async { Ok(http::Response::builder().status(404).body("Not Found".into()).unwrap()) }
     }
 
     /// Add application `data` to router
-    pub fn data<T: Send + Sync + 'static>(self, data: T) -> Self {        
+    pub fn data<T: Send + Sync + 'static>(self, data: T) -> Self {
         self.wrapped_data(Data::new(data))
     }
 
     /// Add application `data` to router from an existing `Data<T>` object
-    pub fn wrapped_data<T: Send + Sync + 'static>(mut self, data: Data<T>) -> Self {        
+    pub fn wrapped_data<T: Send + Sync + 'static>(mut self, data: Data<T>) -> Self {
         let mut map = self.data.take().unwrap_or_else(type_map::concurrent::TypeMap::new);
         map.insert(data);
         self.data = Some(map);
@@ -322,16 +396,16 @@ impl RouterBuilder {
     /// Set the `404: Not Found` handler
     pub fn add_not_found<H>(mut self, handler: H) -> Self
     where
-        H: Into<BoxedServiceFn> + 'static,
+        H: SharedService + Send + Sync + 'static,
     {
-        self.not_found = Some(handler.into());
+        self.not_found = Some(BoxedSharedService::new(handler));
         self
     }
 
     /// Add handler for method and regex. Highest priority wins. Priority is 0 by default.
     pub fn add<H>(self, method: http::Method, regex: &str, handler: H) -> Self
     where
-        H: Into<BoxedServiceFn> + 'static,
+        H: SharedService + Send + Sync + 'static,
     {
         self.add_with_priority(method, regex, 0, handler)
     }
@@ -345,9 +419,9 @@ impl RouterBuilder {
         handler: H,
     ) -> Self
     where
-        H: Into<BoxedServiceFn> + 'static,
+        H: SharedService + Send + Sync + 'static,
     {
-        let handler = handler.into();
+        let handler = BoxedSharedService::new(handler);
         let entry = self
             .inner
             .remove(&method)
@@ -362,7 +436,9 @@ impl RouterBuilder {
     pub fn finish(self) -> err::Result<Router> {
         let mut inner_router = InnerRouter {
             data: self.data.map(Data::new).map(DataMap),
-            not_found: self.not_found.unwrap_or_else(|| Self::default_not_found.into()),
+            not_found: self
+                .not_found
+                .unwrap_or_else(|| BoxedSharedService::new(Self::default_not_found)),
             routers: MethodMap::new(),
         };
 
@@ -374,7 +450,6 @@ impl RouterBuilder {
         Ok(Router(Arc::new(inner_router)))
     }
 }
-
 
 impl tower::Service<Request> for Router {
     type Response = Response;
@@ -395,19 +470,17 @@ impl tower::Service<Request> for Router {
         let service = Arc::clone(&self.0);
 
         if let Some(router) = service.routers.get(req.method()) {
-            match router.recognize(req.uri().path()) {
-                Ok(recognizer::Match { handler, captures }) => {
-                    let extensions_mut = req.extensions_mut();
+            if let Ok(recognizer::Match { handler, captures }) = router.recognize(req.uri().path())
+            {
+                let extensions_mut = req.extensions_mut();
 
-                    if let Some(ref data) = self.0.data {
-                        extensions_mut.insert(data.clone());
-                    }
-
-                    extensions_mut.insert(Arc::new(captures));
-
-                    return Box::pin(handler.0(req));
+                if let Some(ref data) = self.0.data {
+                    extensions_mut.insert(data.clone());
                 }
-                _ => {}
+
+                extensions_mut.insert(Arc::new(captures));
+
+                return handler.0(req);
             }
         }
 
@@ -415,24 +488,21 @@ impl tower::Service<Request> for Router {
             req.extensions_mut().insert(data.clone());
         }
 
-        Box::pin(service.not_found.0(req))
+        service.not_found.0(req)
     }
 }
 
 impl<'a> tower::Service<&'a hyper::server::conn::AddrStream> for Router {
     type Response = Router;
     type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
-    type Future = futures::future::Ready<Result<Self::Response, Self::Error>>;
+    type Future = Ready<Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, _: &'a hyper::server::conn::AddrStream) -> Self::Future {
-        futures::future::ready(Ok(Router(Arc::clone(&self.0))))
+        ready(Ok(Router(Arc::clone(&self.0))))
     }
 }
 
@@ -455,9 +525,7 @@ impl RequestExtensions for Request {
     }
 
     fn data<T: Send + Sync + 'static>(&self) -> Option<Data<T>> {
-        self.extensions().get::<DataMap>()
-            .and_then(|x| x.0.get::<Data<T>>() )
-            .cloned()
+        self.extensions().get::<DataMap>().and_then(|x| x.0.get::<Data<T>>()).cloned()
     }
 }
 
@@ -467,8 +535,6 @@ impl RequestExtensions for http::request::Parts {
     }
 
     fn data<T: Send + Sync + 'static>(&self) -> Option<Data<T>> {
-        self.extensions.get::<DataMap>()
-            .and_then(|x| x.0.get::<Data<T>>() )
-            .cloned()
+        self.extensions.get::<DataMap>().and_then(|x| x.0.get::<Data<T>>()).cloned()
     }
 }

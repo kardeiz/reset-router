@@ -7,10 +7,10 @@ A fast [`RegexSet`](https://doc.rust-lang.org/regex/regex/struct.RegexSet.html) 
 
 Individual handler functions should have the type `H`, where
 ```rust
-    H: Fn(Request) -> F + Sync + Send + 'static,
-    F: Future<Output = Result<S, E>> + Send + 'static,
+    H: Fn(Request) -> F,
+    F: Future<Output = Result<S, E>> + Send,
     S: Into<Response>,
-    E: Into<Response>
+    E: Into<Response>,
 ```
 
 You can return something as simple as `Ok(Response::new("hello world".into()))`. You don't have to worry about futures
@@ -62,6 +62,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Current version: 0.8.0
+Current version: 0.8.1
 
 License: MIT

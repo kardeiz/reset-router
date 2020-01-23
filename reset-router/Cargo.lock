@@ -440,11 +440,12 @@ dependencies = [
 
 [[package]]
 name = "reset-router"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "futures 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "http 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.13.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pin-project 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "reset-recognizer 0.8.0",
  "tokio 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "tower 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
